@@ -8,6 +8,10 @@ import {
   now, requireItem, fullItem, allSummaries, deleteChecklistRecursive,
   VersionConflictError, tryBecomeUILeader, releaseUILeadership,
 } from "./db.js";
+import {
+  validate,
+  PatchItemBodySchema, AddChecklistBodySchema, PatchChecklistBodySchema, AddCommentSchema,
+} from "./schemas.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban.html"), "utf8");
@@ -132,15 +136,33 @@ function broadcastProject(slug) {
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────
 
+const MAX_BODY_BYTES = 1_048_576; // 1 MB
+
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
-    req.on("data", (chunk) => { body += chunk; });
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new Error("Request body too large (max 1 MB)"));
+        return;
+      }
+      body += chunk;
+    });
     req.on("end", () => {
+      if (!body) { resolve({}); return; }
       try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
     });
     req.on("error", reject);
   });
+}
+
+function parsePositiveInt(str, name = "id") {
+  const n = parseInt(str, 10);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`Invalid ${name}: must be a positive integer`);
+  return n;
 }
 
 function json(res, status, data) {
@@ -237,7 +259,7 @@ async function handleRequest(req, res) {
     // Single item routes
     const itemMatch = path.match(/^\/items\/(\d+)$/);
     if (itemMatch) {
-      const id = parseInt(itemMatch[1], 10);
+      const id = parsePositiveInt(itemMatch[1]);
 
       if (req.method === "GET") {
         json(res, 200, fullItem(stmts, id));
@@ -245,7 +267,8 @@ async function handleRequest(req, res) {
       }
 
       if (req.method === "PATCH") {
-        const fields = await parseBody(req);
+        const body = await parseBody(req);
+        const fields = validate(PatchItemBodySchema, body);
         const item = requireItem(stmts, id);
         const versionHeader = req.headers["if-match"];
         const expectedVersion = versionHeader ? parseInt(versionHeader, 10) : fields.version;
@@ -287,15 +310,12 @@ async function handleRequest(req, res) {
     // Checklist routes
     const clMatch = path.match(/^\/items\/(\d+)\/checklist(?:\/(\d+))?$/);
     if (clMatch) {
-      const itemId = parseInt(clMatch[1], 10);
-      const cid = clMatch[2] ? parseInt(clMatch[2], 10) : null;
+      const itemId = parsePositiveInt(clMatch[1], "item_id");
+      const cid = clMatch[2] ? parsePositiveInt(clMatch[2], "cid") : null;
 
       if (req.method === "POST" && cid === null) {
-        const { label, parent_id } = await parseBody(req);
-        if (!label || typeof label !== "string" || !label.trim()) {
-          json(res, 400, { error: "label is required" });
-          return;
-        }
+        const body = await parseBody(req);
+        const { label, parent_id } = validate(AddChecklistBodySchema, body);
         const item = requireItem(stmts, itemId);
         if (parent_id != null) {
           const parent = stmts.getChecklistItem.get(parent_id, itemId);
@@ -312,7 +332,8 @@ async function handleRequest(req, res) {
       }
 
       if (req.method === "PATCH" && cid !== null) {
-        const fields = await parseBody(req);
+        const body = await parseBody(req);
+        const fields = validate(PatchChecklistBodySchema, body);
         const item = requireItem(stmts, itemId);
         const entry = stmts.getChecklistItem.get(cid, itemId);
         if (!entry) { json(res, 404, { error: "checklist item not found" }); return; }
@@ -343,12 +364,9 @@ async function handleRequest(req, res) {
     // Add human comment
     const commentMatch = path.match(/^\/items\/(\d+)\/comments$/);
     if (commentMatch && req.method === "POST") {
-      const id = parseInt(commentMatch[1], 10);
-      const { body: commentBody } = await parseBody(req);
-      if (!commentBody || typeof commentBody !== "string" || !commentBody.trim()) {
-        json(res, 400, { error: "body is required" });
-        return;
-      }
+      const id = parsePositiveInt(commentMatch[1], "item_id");
+      const body = await parseBody(req);
+      const { body: commentBody } = validate(AddCommentSchema, body);
       const item = requireItem(stmts, id);
       const ts = now();
       const result = stmts.addComment.run(id, "human", commentBody.trim(), ts);

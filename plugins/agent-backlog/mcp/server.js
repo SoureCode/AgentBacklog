@@ -11,6 +11,7 @@ import {
 } from "./db.js";
 import { createStore, VersionConflictError } from "./store.js";
 import { startUI, stopUI } from "./ui.js";
+import { StatusEnum, TitleField } from "./schemas.js";
 
 // ── project root detection ────────────────────────────────────────────────
 
@@ -92,7 +93,7 @@ const server = new McpServer({ name: "agent-backlog", version: "3.0.0" });
 server.tool(
   "backlog_list",
   "List backlog items, optionally filtered by status. Each item includes a 'version' field for optimistic locking.",
-  { status: z.enum(["open", "in_progress", "done"]).optional() },
+  { status: StatusEnum.optional() },
   async ({ status }) => ok(await store.listItems(status))
 );
 
@@ -107,9 +108,9 @@ server.tool(
   "backlog_create",
   "Create a new backlog item. Returns the item with version 1.",
   {
-    title: z.string().min(1).max(255),
+    title: TitleField,
     description: z.string().optional(),
-    status: z.enum(["open", "in_progress", "done"]).optional(),
+    status: StatusEnum.optional(),
   },
   async ({ title, description, status }) =>
     ok(await store.createItem({ title, description, status }))
@@ -121,9 +122,9 @@ server.tool(
   {
     id: z.number().int(),
     version: z.number().int().describe("The version number from your last backlog_get. Required for conflict detection."),
-    title: z.string().min(1).max(255).optional(),
+    title: TitleField.optional(),
     description: z.string().optional(),
-    status: z.enum(["open", "in_progress", "done"]).optional(),
+    status: StatusEnum.optional(),
   },
   async ({ id, version, title, description, status }) =>
     ok(await store.updateItem(id, { version, title, description, status }))
@@ -216,7 +217,7 @@ server.tool(
   "Search backlog items by one or more keywords. Supports quoted phrases (\"exact match\"). Items are ranked by relevance: title matches score higher than description matches. All tokens must appear somewhere in the item (AND logic). Optionally filter by status.",
   {
     query: z.string().min(1),
-    status: z.enum(["open", "in_progress", "done"]).optional(),
+    status: StatusEnum.optional(),
   },
   async ({ query, status }) =>
     ok(await store.searchItems(query, status))

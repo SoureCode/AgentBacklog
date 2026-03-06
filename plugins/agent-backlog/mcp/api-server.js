@@ -9,6 +9,13 @@ import { VersionConflictError } from "./db.js";
 import {
   now, requireItem, fullItem, allSummaries, deleteChecklistRecursive,
 } from "./db.js";
+import {
+  validate,
+  CreateItemSchema, UpdateItemSchema,
+  AddChecklistSchema, UpdateChecklistSchema, DeleteChecklistSchema,
+  AddCommentSchema,
+  AddDependencySchema, RemoveDependencySchema,
+} from "./schemas.js";
 
 // ── config ────────────────────────────────────────────────────────────────
 
@@ -79,16 +86,33 @@ function authenticate(req) {
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────
 
+const MAX_BODY_BYTES = 1_048_576; // 1 MB
+
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
-    req.on("data", (chunk) => { body += chunk; });
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new Error("Request body too large (max 1 MB)"));
+        return;
+      }
+      body += chunk;
+    });
     req.on("end", () => {
       if (!body) { resolve({}); return; }
       try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
     });
     req.on("error", reject);
   });
+}
+
+function parsePositiveInt(str, name = "id") {
+  const n = parseInt(str, 10);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`Invalid ${name}: must be a positive integer`);
+  return n;
 }
 
 function json(res, status, data) {
@@ -195,7 +219,8 @@ async function handleRequest(req, res) {
     // POST /api/items
     if (req.method === "POST" && url.pathname === "/api/items") {
       const body = await parseBody(req);
-      const item = store.createItem(body);
+      const data = validate(CreateItemSchema, body);
+      const item = store.createItem(data);
       broadcastProject(projectSlug);
       json(res, 201, item);
       return;
@@ -204,7 +229,7 @@ async function handleRequest(req, res) {
     // GET /api/items/:id
     const itemMatch = url.pathname.match(/^\/api\/items\/(\d+)$/);
     if (itemMatch) {
-      const id = parseInt(itemMatch[1], 10);
+      const id = parsePositiveInt(itemMatch[1]);
 
       if (req.method === "GET") {
         json(res, 200, store.getItem(id));
@@ -213,7 +238,8 @@ async function handleRequest(req, res) {
 
       if (req.method === "PATCH") {
         const body = await parseBody(req);
-        const result = store.updateItem(id, body);
+        const data = validate(UpdateItemSchema, body);
+        const result = store.updateItem(id, data);
         broadcastProject(projectSlug);
         json(res, 200, result);
         return;
@@ -232,9 +258,10 @@ async function handleRequest(req, res) {
     // POST /api/items/:id/checklist
     const clAddMatch = url.pathname.match(/^\/api\/items\/(\d+)\/checklist$/);
     if (clAddMatch && req.method === "POST") {
-      const item_id = parseInt(clAddMatch[1], 10);
+      const item_id = parsePositiveInt(clAddMatch[1], "item_id");
       const body = await parseBody(req);
-      const result = store.addChecklist(item_id, body);
+      const data = validate(AddChecklistSchema, body);
+      const result = store.addChecklist(item_id, data);
       broadcastProject(projectSlug);
       json(res, 201, result);
       return;
@@ -243,11 +270,12 @@ async function handleRequest(req, res) {
     // PATCH /api/items/:id/checklist/:cid
     const clUpdateMatch = url.pathname.match(/^\/api\/items\/(\d+)\/checklist\/(\d+)$/);
     if (clUpdateMatch && req.method === "PATCH") {
-      const item_id = parseInt(clUpdateMatch[1], 10);
-      const cid = parseInt(clUpdateMatch[2], 10);
+      const item_id = parsePositiveInt(clUpdateMatch[1], "item_id");
+      const cid = parsePositiveInt(clUpdateMatch[2], "cid");
       const body = await parseBody(req);
-      body.id = cid;
-      const result = store.updateChecklist(item_id, body);
+      const data = validate(UpdateChecklistSchema, body);
+      data.id = cid;
+      const result = store.updateChecklist(item_id, data);
       broadcastProject(projectSlug);
       json(res, 200, result);
       return;
@@ -255,11 +283,12 @@ async function handleRequest(req, res) {
 
     // DELETE /api/items/:id/checklist/:cid
     if (clUpdateMatch && req.method === "DELETE") {
-      const item_id = parseInt(clUpdateMatch[1], 10);
-      const cid = parseInt(clUpdateMatch[2], 10);
+      const item_id = parsePositiveInt(clUpdateMatch[1], "item_id");
+      const cid = parsePositiveInt(clUpdateMatch[2], "cid");
       const body = await parseBody(req);
-      body.id = cid;
-      const result = store.deleteChecklist(item_id, body);
+      const data = validate(DeleteChecklistSchema, body);
+      data.id = cid;
+      const result = store.deleteChecklist(item_id, data);
       broadcastProject(projectSlug);
       json(res, 200, result);
       return;
@@ -268,9 +297,10 @@ async function handleRequest(req, res) {
     // POST /api/items/:id/comments
     const commentMatch = url.pathname.match(/^\/api\/items\/(\d+)\/comments$/);
     if (commentMatch && req.method === "POST") {
-      const item_id = parseInt(commentMatch[1], 10);
+      const item_id = parsePositiveInt(commentMatch[1], "item_id");
       const body = await parseBody(req);
-      const result = store.addComment(item_id, body);
+      const data = validate(AddCommentSchema, body);
+      const result = store.addComment(item_id, data);
       broadcastProject(projectSlug);
       json(res, 201, result);
       return;
@@ -279,9 +309,10 @@ async function handleRequest(req, res) {
     // POST /api/items/:id/dependencies
     const depAddMatch = url.pathname.match(/^\/api\/items\/(\d+)\/dependencies$/);
     if (depAddMatch && req.method === "POST") {
-      const item_id = parseInt(depAddMatch[1], 10);
+      const item_id = parsePositiveInt(depAddMatch[1], "item_id");
       const body = await parseBody(req);
-      const result = store.addDependency(item_id, body);
+      const data = validate(AddDependencySchema, body);
+      const result = store.addDependency(item_id, data);
       broadcastProject(projectSlug);
       json(res, 201, result);
       return;
@@ -290,10 +321,11 @@ async function handleRequest(req, res) {
     // DELETE /api/items/:id/dependencies/:did
     const depDelMatch = url.pathname.match(/^\/api\/items\/(\d+)\/dependencies\/(\d+)$/);
     if (depDelMatch && req.method === "DELETE") {
-      const item_id = parseInt(depDelMatch[1], 10);
-      const depends_on_id = parseInt(depDelMatch[2], 10);
+      const item_id = parsePositiveInt(depDelMatch[1], "item_id");
+      const depends_on_id = parsePositiveInt(depDelMatch[2], "depends_on_id");
       const body = await parseBody(req);
-      const result = store.removeDependency(item_id, { ...body, depends_on_id });
+      const data = validate(RemoveDependencySchema, body);
+      const result = store.removeDependency(item_id, { ...data, depends_on_id });
       broadcastProject(projectSlug);
       json(res, 200, result);
       return;
