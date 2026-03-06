@@ -92,7 +92,9 @@ export function openDatabase(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_checklist_parent ON checklist_items(parent_id);
     CREATE INDEX IF NOT EXISTS idx_comments_item ON comments(item_id);
     CREATE INDEX IF NOT EXISTS idx_dependencies_item ON dependencies(item_id);
+    CREATE INDEX IF NOT EXISTS idx_dependencies_depends_on ON dependencies(depends_on_id);
     CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
+    CREATE INDEX IF NOT EXISTS idx_items_updated_at ON items(updated_at DESC);
   `);
 
   // Migration: add version column to existing databases
@@ -161,6 +163,10 @@ export function prepareStatements(db) {
     ),
 
     deleteItem: db.prepare("DELETE FROM items WHERE id = ?"),
+
+    countItemsByStatus: db.prepare(
+      "SELECT status, COUNT(*) as cnt FROM items GROUP BY status"
+    ),
   };
 }
 
@@ -176,7 +182,16 @@ export function requireItem(stmts, id) {
   return item;
 }
 
-export function buildChecklistTree(stmts, itemId, parentId) {
+export const CHECKLIST_MAX_DEPTH = 10;
+
+export function buildChecklistTree(stmts, itemId, parentId, depth = 0, maxDepth = CHECKLIST_MAX_DEPTH) {
+  if (depth > maxDepth) {
+    throw new Error(
+      `Checklist nesting exceeds maximum allowed depth of ${maxDepth}. ` +
+      `Restructure the checklist to reduce nesting.`
+    );
+  }
+
   const rows = parentId === null
     ? stmts.getTopChecklist.all(itemId)
     : stmts.getChecklistByParent.all(itemId, parentId);
@@ -186,7 +201,7 @@ export function buildChecklistTree(stmts, itemId, parentId) {
     label: row.label,
     checked: !!row.checked,
     position: row.position,
-    children: buildChecklistTree(stmts, itemId, row.id),
+    children: buildChecklistTree(stmts, itemId, row.id, depth + 1, maxDepth),
   }));
 }
 

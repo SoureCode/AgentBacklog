@@ -106,11 +106,13 @@ function listProjects() {
     try {
       const p = getProject(slug);
       if (p) {
-        const items = p.stmts.listItems.all();
-        const open = items.filter((i) => i.status === "open").length;
-        const inProgress = items.filter((i) => i.status === "in_progress").length;
-        const done = items.filter((i) => i.status === "done").length;
-        projects.push({ slug, root: project.root, open, in_progress: inProgress, done, total: items.length });
+        const counts = p.stmts.countItemsByStatus.all();
+        const byStatus = Object.fromEntries(counts.map((r) => [r.status, r.cnt]));
+        const open = byStatus.open ?? 0;
+        const inProgress = byStatus.in_progress ?? 0;
+        const done = byStatus.done ?? 0;
+        const total = open + inProgress + done;
+        projects.push({ slug, root: project.root, open, in_progress: inProgress, done, total });
       }
     } catch {
       projects.push({ slug, root: project.root, error: true });
