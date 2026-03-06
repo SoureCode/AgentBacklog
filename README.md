@@ -39,7 +39,7 @@ npm dependencies (`better-sqlite3`, `@modelcontextprotocol/sdk`) are installed a
 ```bash
 git clone https://github.com/SoureCode/AgentBacklog.git
 cd AgentBacklog
-npm install --prefix mcp
+npm install --prefix plugins/agent-backlog/mcp
 claude plugin marketplace add .
 claude plugin install agent-backlog@sourecode-backlog
 ```
@@ -234,31 +234,33 @@ Tools marked **Yes** require passing the item's current `version` number (from `
 ```
 AgentBacklog/
 ├── .claude-plugin/
-│   ├── plugin.json           # Plugin metadata
-│   └── marketplace.json      # Marketplace manifest
-├── .mcp.json                 # MCP server configuration
-├── hooks/
-│   └── hooks.json            # SessionStart hook for npm install
-├── agents/
-│   ├── backlog-groomer.md    # Backlog health and maintenance agent
-│   ├── scope-analyzer.md    # Pre-work impact analysis agent
-│   ├── task-implementer.md  # Task execution agent
-│   └── task-planner.md      # Codebase-aware task planning agent
-├── commands/
-│   ├── backlog.md            # /backlog command
-│   ├── backlog-create.md     # /backlog-create command
-│   └── backlog-next.md       # /backlog-next command
-├── skills/
-│   └── backlog-manager/
-│       └── SKILL.md          # Auto-triggered backlog skill
-└── mcp/
-    ├── db.js                 # SQLite database, registry, leader election
-    ├── server.js             # MCP server (stdio)
-    ├── ui.js                 # Kanban UI server (HTTP)
-    ├── api-server.js         # Central API server for team mode
-    ├── store.js              # Store factory (local vs remote)
-    ├── store-local.js        # LocalStore — SQLite via db.js
-    ├── store-remote.js       # RemoteStore — HTTP client for API server
-    ├── kanban.html           # Kanban board SPA
-    └── package.json
+│   └── marketplace.json              # Marketplace manifest
+└── plugins/
+    └── agent-backlog/                # Plugin root
+        ├── plugin.json               # Plugin metadata
+        ├── .mcp.json                 # MCP server configuration
+        ├── hooks/
+        │   └── hooks.json            # SessionStart hook for npm install
+        ├── agents/
+        │   ├── backlog-groomer.md    # Backlog health and maintenance agent
+        │   ├── scope-analyzer.md     # Pre-work impact analysis agent
+        │   ├── task-implementer.md   # Task execution agent
+        │   └── task-planner.md       # Codebase-aware task planning agent
+        ├── commands/
+        │   ├── backlog.md            # /backlog command
+        │   ├── backlog-create.md     # /backlog-create command
+        │   └── backlog-next.md       # /backlog-next command
+        ├── skills/
+        │   └── backlog-manager/
+        │       └── SKILL.md          # Auto-triggered backlog skill
+        └── mcp/
+            ├── db.js                 # SQLite database, registry, leader election
+            ├── server.js             # MCP server (stdio)
+            ├── ui.js                 # Kanban UI server (HTTP)
+            ├── api-server.js         # Central API server for team mode
+            ├── store.js              # Store factory (local vs remote)
+            ├── store-local.js        # LocalStore — SQLite via db.js
+            ├── store-remote.js       # RemoteStore — HTTP client for API server
+            ├── kanban.html           # Kanban board SPA
+            └── package.json
 ```
