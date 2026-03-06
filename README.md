@@ -9,7 +9,7 @@ A Claude Code plugin for managing agent task backlogs with a kanban UI.
 - **Project Aware** — Auto-detects git root, stores `.backlog.db` per project
 - **Kanban UI** — Central web UI at `http://localhost:3456` with project selector and live updates via SSE
 - **Leader Election** — MCP server instances coordinate to run a single UI; automatic failover on crash
-- **Slash Commands** — `/backlog`, `/backlog-create`, `/backlog-next`, `/backlog-done`
+- **Slash Commands** — `/backlog`, `/backlog-create`, `/backlog-next`
 - **Task Planner Agent** — Explores the codebase to create structured backlog items
 - **Backlog Manager Skill** — Automatically activates when discussing tasks or backlog
 
@@ -115,7 +115,6 @@ Open `http://localhost:3456` and select a project from the dropdown. The board u
 | `/backlog [query]` | View the backlog or search by keyword |
 | `/backlog-create <description>` | Create a new task with duplicate detection |
 | `/backlog-next` | Find and start the next unblocked task |
-| `/backlog-done <id>` | Mark a task as complete |
 
 ## MCP Tools
 
@@ -157,8 +156,7 @@ AgentBacklog/
 ├── commands/
 │   ├── backlog.md            # /backlog command
 │   ├── backlog-create.md     # /backlog-create command
-│   ├── backlog-next.md       # /backlog-next command
-│   └── backlog-done.md       # /backlog-done command
+│   └── backlog-next.md       # /backlog-next command
 ├── skills/
 │   └── backlog-manager/
 │       └── SKILL.md          # Auto-triggered backlog skill
