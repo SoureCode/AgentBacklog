@@ -1,4 +1,9 @@
 node_modules/
-agent-backlog.json
 *.tmp
 .claude/
+
+# Backlog database (per-project, not shared)
+.backlog.db
+.backlog.db-wal
+.backlog.db-shm
+agent-backlog.json

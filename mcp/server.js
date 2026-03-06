@@ -4,196 +4,239 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { readFileSync, writeFileSync, existsSync, renameSync, mkdirSync, watch } from "fs";
-import { randomUUID } from "crypto";
+import { readFileSync, existsSync } from "fs";
+import { execSync } from "child_process";
 import { createServer } from "http";
+import Database from "better-sqlite3";
 
-const FILE_PATH = process.env.BACKLOG_FILE ?? join(process.cwd(), "agent-backlog.json");
+// ── database path ─────────────────────────────────────────────────────────
 
-// ── schema validation ──────────────────────────────────────────────────────
-
-const ChecklistItemSchema = z.object({
-  id: z.number().int().positive(),
-  label: z.string().min(1),
-  checked: z.boolean(),
-  position: z.number().int().min(0),
-  children: z.lazy(() => z.array(ChecklistItemSchema)).default([]),
-});
-
-const CommentSchema = z.object({
-  id: z.number().int().positive(),
-  author: z.enum(["agent", "human"]).default("agent"),
-  body: z.string().min(1),
-  created_at: z.string().datetime(),
-});
-
-const BacklogItemSchema = z.object({
-  id: z.number().int().positive(),
-  title: z.string().min(1).max(255),
-  status: z.enum(["open", "in_progress", "done"]),
-  description: z.string(),
-  created_at: z.string().datetime(),
-  updated_at: z.string().datetime(),
-  checklist: z.array(ChecklistItemSchema).default([]),
-  dependencies: z.array(z.object({ depends_on_id: z.number().int().positive() })).default([]),
-  comments: z.array(CommentSchema).default([]),
-});
-
-const StoreSchema = z.object({
-  nextId: z.number().int().positive(),
-  nextChecklistId: z.number().int().positive(),
-  nextCommentId: z.number().int().positive(),
-  items: z.array(BacklogItemSchema),
-});
-
-// ── persistence ────────────────────────────────────────────────────────────
-
-function load() {
-  if (!existsSync(FILE_PATH)) {
-    return { nextId: 1, nextChecklistId: 1, nextCommentId: 1, items: [] };
-  }
-  let raw;
+function detectProjectRoot() {
   try {
-    raw = JSON.parse(readFileSync(FILE_PATH, "utf8"));
+    return execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
   } catch {
-    throw new Error(`Failed to parse ${FILE_PATH}: file is not valid JSON`);
+    return process.cwd();
   }
-  const result = StoreSchema.safeParse(raw);
-  if (!result.success) {
-    throw new Error(`Data integrity error in ${FILE_PATH}: ${result.error.message}`);
-  }
-  return result.data;
 }
 
-function save(data) {
-  // validate before writing
-  StoreSchema.parse(data);
+const DB_PATH = process.env.BACKLOG_FILE ?? join(detectProjectRoot(), ".backlog.db");
 
-  // atomic write: write to tmp then rename
-  const dir = dirname(FILE_PATH);
-  mkdirSync(dir, { recursive: true });
-  const tmp = join(dir, `.agent-backlog-${randomUUID()}.tmp`);
-  writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf8");
-  renameSync(tmp, FILE_PATH);
+// ── database setup ────────────────────────────────────────────────────────
 
-  // Broadcast update to SSE clients immediately (file watcher is unreliable
-  // after atomic rename because the inode changes)
-  broadcastSSE("update", data.items.map(summarize));
-}
+const db = new Database(DB_PATH);
+db.pragma("journal_mode = WAL");
+db.pragma("foreign_keys = ON");
+db.pragma("busy_timeout = 5000");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 255),
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'done')),
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS checklist_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    parent_id INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE,
+    label TEXT NOT NULL CHECK(length(label) >= 1),
+    checked INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    author TEXT NOT NULL DEFAULT 'agent' CHECK(author IN ('agent', 'human')),
+    body TEXT NOT NULL CHECK(length(body) >= 1),
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS dependencies (
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    depends_on_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    PRIMARY KEY (item_id, depends_on_id),
+    CHECK(item_id != depends_on_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_checklist_item ON checklist_items(item_id);
+  CREATE INDEX IF NOT EXISTS idx_checklist_parent ON checklist_items(parent_id);
+  CREATE INDEX IF NOT EXISTS idx_comments_item ON comments(item_id);
+  CREATE INDEX IF NOT EXISTS idx_dependencies_item ON dependencies(item_id);
+  CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
+`);
+
+// ── prepared statements ───────────────────────────────────────────────────
+
+const stmts = {
+  listItems: db.prepare("SELECT * FROM items ORDER BY id"),
+  listItemsByStatus: db.prepare("SELECT * FROM items WHERE status = ? ORDER BY id"),
+  getItem: db.prepare("SELECT * FROM items WHERE id = ?"),
+  createItem: db.prepare(
+    "INSERT INTO items (title, status, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+  ),
+  updateItem: db.prepare(
+    "UPDATE items SET title = ?, description = ?, status = ?, updated_at = ? WHERE id = ?"
+  ),
+
+  getChecklist: db.prepare("SELECT * FROM checklist_items WHERE item_id = ? ORDER BY position"),
+  getChecklistItem: db.prepare("SELECT * FROM checklist_items WHERE id = ? AND item_id = ?"),
+  getChecklistByParent: db.prepare(
+    "SELECT * FROM checklist_items WHERE item_id = ? AND parent_id = ? ORDER BY position"
+  ),
+  getTopChecklist: db.prepare(
+    "SELECT * FROM checklist_items WHERE item_id = ? AND parent_id IS NULL ORDER BY position"
+  ),
+  countChecklistByParent: db.prepare(
+    "SELECT COUNT(*) as cnt FROM checklist_items WHERE item_id = ? AND parent_id = ?"
+  ),
+  countTopChecklist: db.prepare(
+    "SELECT COUNT(*) as cnt FROM checklist_items WHERE item_id = ? AND parent_id IS NULL"
+  ),
+  addChecklist: db.prepare(
+    "INSERT INTO checklist_items (item_id, parent_id, label, checked, position) VALUES (?, ?, ?, 0, ?)"
+  ),
+  updateChecklist: db.prepare(
+    "UPDATE checklist_items SET label = ?, checked = ? WHERE id = ?"
+  ),
+  deleteChecklist: db.prepare("DELETE FROM checklist_items WHERE id = ?"),
+  getChecklistChildren: db.prepare("SELECT id FROM checklist_items WHERE parent_id = ?"),
+
+  addComment: db.prepare(
+    "INSERT INTO comments (item_id, author, body, created_at) VALUES (?, ?, ?, ?)"
+  ),
+  getComments: db.prepare("SELECT * FROM comments WHERE item_id = ? ORDER BY created_at"),
+
+  getDeps: db.prepare("SELECT depends_on_id FROM dependencies WHERE item_id = ?"),
+  addDep: db.prepare("INSERT OR IGNORE INTO dependencies (item_id, depends_on_id) VALUES (?, ?)"),
+  removeDep: db.prepare("DELETE FROM dependencies WHERE item_id = ? AND depends_on_id = ?"),
+
+  countChecklistTotal: db.prepare(
+    "SELECT COUNT(*) as cnt FROM checklist_items WHERE item_id = ?"
+  ),
+  countChecklistDone: db.prepare(
+    "SELECT COUNT(*) as cnt FROM checklist_items WHERE item_id = ? AND checked = 1"
+  ),
+};
+
+// ── helpers ───────────────────────────────────────────────────────────────
 
 function now() {
   return new Date().toISOString();
-}
-
-// ── helpers ────────────────────────────────────────────────────────────────
-
-function getItem(data, id) {
-  const item = data.items.find((i) => i.id === id);
-  if (!item) throw new Error(`BacklogItem ${id} not found`);
-  return item;
 }
 
 function ok(payload) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }
 
+function requireItem(id) {
+  const item = stmts.getItem.get(id);
+  if (!item) throw new Error(`BacklogItem ${id} not found`);
+  return item;
+}
+
+function buildChecklistTree(itemId, parentId) {
+  const rows = parentId === null
+    ? stmts.getTopChecklist.all(itemId)
+    : stmts.getChecklistByParent.all(itemId, parentId);
+
+  return rows.map((row) => ({
+    id: row.id,
+    label: row.label,
+    checked: !!row.checked,
+    position: row.position,
+    children: buildChecklistTree(itemId, row.id),
+  }));
+}
+
+function fullItem(id) {
+  const item = requireItem(id);
+  return {
+    ...item,
+    checklist: buildChecklistTree(item.id, null),
+    dependencies: stmts.getDeps.all(item.id).map((d) => ({ depends_on_id: d.depends_on_id })),
+    comments: stmts.getComments.all(item.id),
+  };
+}
+
 function summarize(item) {
+  const total = stmts.countChecklistTotal.get(item.id).cnt;
+  const done = stmts.countChecklistDone.get(item.id).cnt;
   return {
     id: item.id,
     title: item.title,
     status: item.status,
     updated_at: item.updated_at,
-    dependencies: item.dependencies.map((d) => d.depends_on_id),
-    checklist: item.checklist.length
-      ? { total: countChecklist(item.checklist), done: countChecklist(item.checklist, true) }
-      : undefined,
+    dependencies: stmts.getDeps.all(item.id).map((d) => d.depends_on_id),
+    checklist: total > 0 ? { total, done } : undefined,
   };
 }
 
-function countChecklist(checklist, checked) {
-  let n = 0;
-  for (const c of checklist) {
-    if (checked === undefined || c.checked === checked) n++;
-    n += countChecklist(c.children ?? [], checked);
-  }
-  return n;
+function allSummaries(status) {
+  const items = status ? stmts.listItemsByStatus.all(status) : stmts.listItems.all();
+  return items.map(summarize);
 }
 
-// Collect all dependency edges as a map: id → Set<depends_on_id>
-function buildDepGraph(data) {
-  const graph = new Map();
-  for (const item of data.items) {
-    graph.set(item.id, new Set(item.dependencies.map((d) => d.depends_on_id)));
+function deleteChecklistRecursive(id) {
+  const children = stmts.getChecklistChildren.all(id);
+  for (const child of children) {
+    deleteChecklistRecursive(child.id);
   }
-  return graph;
+  stmts.deleteChecklist.run(id);
 }
 
-// Returns true if adding edge from → to would create a cycle
-function wouldCycle(graph, from, to) {
+// Cycle detection for dependencies
+function wouldCycle(fromId, toId) {
   const visited = new Set();
-  const stack = [to];
+  const stack = [toId];
   while (stack.length) {
     const node = stack.pop();
-    if (node === from) return true;
+    if (node === fromId) return true;
     if (visited.has(node)) continue;
     visited.add(node);
-    for (const dep of graph.get(node) ?? []) stack.push(dep);
+    for (const dep of stmts.getDeps.all(node)) {
+      stack.push(dep.depends_on_id);
+    }
   }
   return false;
 }
 
-function allChecklistIds(checklist) {
-  const ids = [];
-  for (const c of checklist) {
-    ids.push(c.id);
-    ids.push(...allChecklistIds(c.children ?? []));
+// ── SSE ───────────────────────────────────────────────────────────────────
+
+const sseClients = new Set();
+
+function broadcastSSE(event, data) {
+  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of sseClients) {
+    try { res.write(msg); } catch { sseClients.delete(res); }
   }
-  return ids;
 }
 
-function findChecklist(checklist, id) {
-  for (const c of checklist) {
-    if (c.id === id) return c;
-    const found = findChecklist(c.children ?? [], id);
-    if (found) return found;
-  }
-  return null;
+function broadcast() {
+  broadcastSSE("update", allSummaries());
 }
 
-function removeChecklist(checklist, id) {
-  const idx = checklist.findIndex((c) => c.id === id);
-  if (idx !== -1) { checklist.splice(idx, 1); return true; }
-  for (const c of checklist) {
-    if (removeChecklist(c.children ?? [], id)) return true;
-  }
-  return false;
-}
+// ── MCP server ────────────────────────────────────────────────────────────
 
-// ── server ─────────────────────────────────────────────────────────────────
+const server = new McpServer({ name: "agent-backlog", version: "2.0.0" });
 
-const server = new McpServer({ name: "agent-backlog", version: "1.0.0" });
-
-// ── backlog items ──────────────────────────────────────────────────────────
+// ── backlog items ─────────────────────────────────────────────────────────
 
 server.tool(
   "backlog_list",
   "List backlog items, optionally filtered by status.",
   { status: z.enum(["open", "in_progress", "done"]).optional() },
-  ({ status }) => {
-    const data = load();
-    const items = status ? data.items.filter((i) => i.status === status) : data.items;
-    return ok(items.map(summarize));
-  }
+  ({ status }) => ok(allSummaries(status))
 );
 
 server.tool(
   "backlog_get",
   "Get a single backlog item with its checklist and dependencies.",
   { id: z.number().int() },
-  ({ id }) => {
-    const data = load();
-    return ok(getItem(data, id));
-  }
+  ({ id }) => ok(fullItem(id))
 );
 
 server.tool(
@@ -205,20 +248,10 @@ server.tool(
     status: z.enum(["open", "in_progress", "done"]).optional(),
   },
   ({ title, description = "", status = "open" }) => {
-    const data = load();
-    const item = {
-      id: data.nextId++,
-      title,
-      status,
-      description,
-      created_at: now(),
-      updated_at: now(),
-      checklist: [],
-      dependencies: [],
-      comments: [],
-    };
-    data.items.push(item);
-    save(data);
+    const ts = now();
+    const result = stmts.createItem.run(title, status, description, ts, ts);
+    const item = fullItem(result.lastInsertRowid);
+    broadcast();
     return ok(item);
   }
 );
@@ -232,16 +265,22 @@ server.tool(
     description: z.string().optional(),
     status: z.enum(["open", "in_progress", "done"]).optional(),
   },
-  ({ id, ...fields }) => {
-    const data = load();
-    const item = getItem(data, id);
-    Object.assign(item, fields, { updated_at: now() });
-    save(data);
-    return ok(item);
+  ({ id, title, description, status }) => {
+    const item = requireItem(id);
+    stmts.updateItem.run(
+      title ?? item.title,
+      description ?? item.description,
+      status ?? item.status,
+      now(),
+      id
+    );
+    const updated = fullItem(id);
+    broadcast();
+    return ok(updated);
   }
 );
 
-// ── checklist ──────────────────────────────────────────────────────────────
+// ── checklist ─────────────────────────────────────────────────────────────
 
 server.tool(
   "checklist_add",
@@ -252,35 +291,26 @@ server.tool(
     parent_id: z.number().int().optional(),
   },
   ({ item_id, label, parent_id }) => {
-    const data = load();
-    const item = getItem(data, item_id);
+    requireItem(item_id);
 
-    // ensure parent_id belongs to the same backlog item, not another
+    let position;
     if (parent_id !== undefined) {
-      const allIds = allChecklistIds(item.checklist);
-      if (!allIds.includes(parent_id)) {
-        throw new Error(`ChecklistItem ${parent_id} not found on BacklogItem ${item_id}`);
-      }
+      const parent = stmts.getChecklistItem.get(parent_id, item_id);
+      if (!parent) throw new Error(`ChecklistItem ${parent_id} not found on BacklogItem ${item_id}`);
+      position = stmts.countChecklistByParent.get(item_id, parent_id).cnt;
+    } else {
+      position = stmts.countTopChecklist.get(item_id).cnt;
     }
 
+    const result = stmts.addChecklist.run(item_id, parent_id ?? null, label, position);
     const entry = {
-      id: data.nextChecklistId++,
+      id: result.lastInsertRowid,
       label,
       checked: false,
-      position: 0,
+      position,
       children: [],
     };
-
-    if (parent_id !== undefined) {
-      const parent = findChecklist(item.checklist, parent_id);
-      entry.position = parent.children.length;
-      parent.children.push(entry);
-    } else {
-      entry.position = item.checklist.length;
-      item.checklist.push(entry);
-    }
-
-    save(data);
+    broadcast();
     return ok(entry);
   }
 );
@@ -294,14 +324,17 @@ server.tool(
     label: z.string().min(1).optional(),
     checked: z.boolean().optional(),
   },
-  ({ item_id, id, ...fields }) => {
-    const data = load();
-    const item = getItem(data, item_id);
-    const entry = findChecklist(item.checklist, id);
+  ({ item_id, id, label, checked }) => {
+    const entry = stmts.getChecklistItem.get(id, item_id);
     if (!entry) throw new Error(`ChecklistItem ${id} not found on BacklogItem ${item_id}`);
-    Object.assign(entry, fields);
-    save(data);
-    return ok(entry);
+    stmts.updateChecklist.run(
+      label ?? entry.label,
+      checked !== undefined ? (checked ? 1 : 0) : entry.checked,
+      id
+    );
+    const updated = stmts.getChecklistItem.get(id, item_id);
+    broadcast();
+    return ok({ ...updated, checked: !!updated.checked });
   }
 );
 
@@ -313,16 +346,15 @@ server.tool(
     id: z.number().int(),
   },
   ({ item_id, id }) => {
-    const data = load();
-    const item = getItem(data, item_id);
-    if (!removeChecklist(item.checklist, id))
-      throw new Error(`ChecklistItem ${id} not found on BacklogItem ${item_id}`);
-    save(data);
+    const entry = stmts.getChecklistItem.get(id, item_id);
+    if (!entry) throw new Error(`ChecklistItem ${id} not found on BacklogItem ${item_id}`);
+    deleteChecklistRecursive(id);
+    broadcast();
     return ok({ deleted: id });
   }
 );
 
-// ── comments ───────────────────────────────────────────────────────────────
+// ── comments ──────────────────────────────────────────────────────────────
 
 server.tool(
   "comment_add",
@@ -332,23 +364,22 @@ server.tool(
     body: z.string().min(1),
   },
   ({ item_id, body }) => {
-    const author = "agent";
-    const data = load();
-    const item = getItem(data, item_id);
-    const comment = {
-      id: data.nextCommentId++,
-      author,
-      body,
-      created_at: now(),
-    };
-    item.comments.push(comment);
-    item.updated_at = now();
-    save(data);
+    requireItem(item_id);
+    const ts = now();
+    const result = stmts.addComment.run(item_id, "agent", body, ts);
+    stmts.updateItem.run(
+      undefined, undefined, undefined, ts, item_id
+    );
+    // re-read to get proper values after partial update
+    const item = requireItem(item_id);
+    stmts.updateItem.run(item.title, item.description, item.status, ts, item_id);
+    const comment = { id: Number(result.lastInsertRowid), author: "agent", body, created_at: ts };
+    broadcast();
     return ok(comment);
   }
 );
 
-// ── dependencies ───────────────────────────────────────────────────────────
+// ── dependencies ──────────────────────────────────────────────────────────
 
 server.tool(
   "dependency_add",
@@ -359,21 +390,15 @@ server.tool(
   },
   ({ item_id, depends_on_id }) => {
     if (item_id === depends_on_id) throw new Error("An item cannot depend on itself");
-    const data = load();
-    const item = getItem(data, item_id);
-    getItem(data, depends_on_id); // FK check
+    requireItem(item_id);
+    requireItem(depends_on_id);
 
-    const graph = buildDepGraph(data);
-    if (wouldCycle(graph, item_id, depends_on_id)) {
-      throw new Error(
-        `Adding this dependency would create a cycle: ${item_id} → ${depends_on_id}`
-      );
+    if (wouldCycle(item_id, depends_on_id)) {
+      throw new Error(`Adding this dependency would create a cycle: ${item_id} → ${depends_on_id}`);
     }
 
-    if (!item.dependencies.some((d) => d.depends_on_id === depends_on_id)) {
-      item.dependencies.push({ depends_on_id });
-    }
-    save(data);
+    stmts.addDep.run(item_id, depends_on_id);
+    broadcast();
     return ok({ item_id, depends_on_id });
   }
 );
@@ -386,19 +411,16 @@ server.tool(
     depends_on_id: z.number().int(),
   },
   ({ item_id, depends_on_id }) => {
-    const data = load();
-    const item = getItem(data, item_id);
-    const before = item.dependencies.length;
-    item.dependencies = item.dependencies.filter((d) => d.depends_on_id !== depends_on_id);
-    if (item.dependencies.length === before) {
+    const result = stmts.removeDep.run(item_id, depends_on_id);
+    if (result.changes === 0) {
       throw new Error(`Dependency ${item_id} → ${depends_on_id} does not exist`);
     }
-    save(data);
+    broadcast();
     return ok({ removed: { item_id, depends_on_id } });
   }
 );
 
-// ── search ─────────────────────────────────────────────────────────────────
+// ── search ────────────────────────────────────────────────────────────────
 
 server.tool(
   "backlog_search",
@@ -408,9 +430,6 @@ server.tool(
     status: z.enum(["open", "in_progress", "done"]).optional(),
   },
   ({ query, status }) => {
-    const data = load();
-
-    // Parse tokens: quoted phrases stay together, other words are individual tokens
     const tokens = [];
     const phraseRe = /"([^"]+)"|(\S+)/g;
     let m;
@@ -418,28 +437,24 @@ server.tool(
       tokens.push((m[1] ?? m[2]).toLowerCase());
     }
 
+    const items = status ? stmts.listItemsByStatus.all(status) : stmts.listItems.all();
     const scored = [];
-    for (const item of data.items) {
-      if (status && item.status !== status) continue;
 
+    for (const item of items) {
       const titleLower = item.title.toLowerCase();
       const descLower = item.description.toLowerCase();
 
-      // Every token must match somewhere (AND semantics)
       const allMatch = tokens.every((t) => titleLower.includes(t) || descLower.includes(t));
       if (!allMatch) continue;
 
-      // Score: title hit = 2 pts each, description hit = 1 pt each
       let score = 0;
       for (const t of tokens) {
         if (titleLower.includes(t)) score += 2;
         if (descLower.includes(t)) score += 1;
       }
-
       scored.push({ score, item });
     }
 
-    // Sort descending by score
     scored.sort((a, b) => b.score - a.score);
     return ok(scored.map((s) => summarize(s.item)));
   }
@@ -451,292 +466,198 @@ const UI_PORT = parseInt(process.env.BACKLOG_UI_PORT ?? "3456", 10);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban.html"), "utf8");
 
-// ── SSE clients ───────────────────────────────────────────────────────────
-
-const sseClients = new Set();
-
-function broadcastSSE(event, data) {
-  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const res of sseClients) {
-    try { res.write(msg); } catch { sseClients.delete(res); }
-  }
-}
-
-// Watch the backlog file for changes and push to SSE clients
-let watchDebounce = null;
-function startFileWatcher() {
-  if (!existsSync(FILE_PATH)) return;
-  try {
-    watch(FILE_PATH, () => {
-      // Debounce: atomic write triggers multiple events
-      clearTimeout(watchDebounce);
-      watchDebounce = setTimeout(() => {
-        try {
-          const data = load();
-          broadcastSSE("update", data.items.map(summarize));
-        } catch { /* ignore read errors during atomic write */ }
-      }, 100);
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
     });
-  } catch { /* watch not supported on this fs, clients fall back to polling */ }
+    req.on("error", reject);
+  });
 }
-startFileWatcher();
 
-const httpServer = createServer((req, res) => {
-  // CORS headers for local dev
+const httpServer = createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
+  if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
   const url = new URL(req.url, `http://localhost:${UI_PORT}`);
 
-  // SSE endpoint for live updates
-  if (req.method === "GET" && url.pathname === "/api/events") {
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
-    });
-    // Send initial data immediately
-    try {
-      const data = load();
-      res.write(`event: update\ndata: ${JSON.stringify(data.items.map(summarize))}\n\n`);
-    } catch { /* empty */ }
-    sseClients.add(res);
-    req.on("close", () => sseClients.delete(res));
-    return;
-  }
-
-  // Serve kanban HTML
-  if (req.method === "GET" && url.pathname === "/") {
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(KANBAN_HTML);
-    return;
-  }
-
-  // List items (summary)
-  if (req.method === "GET" && url.pathname === "/api/items") {
-    try {
-      const data = load();
-      const items = data.items.map(summarize);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(items));
-    } catch (e) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: e.message }));
-    }
-    return;
-  }
-
-  // Get single item (full detail)
-  const itemMatch = url.pathname.match(/^\/api\/items\/(\d+)$/);
-  if (itemMatch) {
-    const id = parseInt(itemMatch[1], 10);
-
-    if (req.method === "GET") {
-      try {
-        const data = load();
-        const item = getItem(data, id);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(item));
-      } catch (e) {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: e.message }));
-      }
-      return;
-    }
-
-    if (req.method === "PATCH") {
-      let body = "";
-      req.on("data", chunk => { body += chunk; });
-      req.on("end", () => {
-        try {
-          const fields = JSON.parse(body);
-          const data = load();
-          const item = getItem(data, id);
-          const allowed = ["title", "description", "status"];
-          for (const key of Object.keys(fields)) {
-            if (allowed.includes(key)) item[key] = fields[key];
-          }
-          item.updated_at = now();
-          save(data);
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(item));
-        } catch (e) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: e.message }));
-        }
+  try {
+    // SSE
+    if (req.method === "GET" && url.pathname === "/api/events") {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
       });
+      res.write(`event: update\ndata: ${JSON.stringify(allSummaries())}\n\n`);
+      sseClients.add(res);
+      req.on("close", () => sseClients.delete(res));
       return;
     }
 
-    if (req.method === "DELETE") {
-      try {
-        const data = load();
-        const idx = data.items.findIndex((i) => i.id === id);
-        if (idx === -1) throw new Error("Item not found: " + id);
-        data.items.splice(idx, 1);
-        save(data);
+    // Kanban HTML
+    if (req.method === "GET" && url.pathname === "/") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(KANBAN_HTML);
+      return;
+    }
+
+    // List items
+    if (req.method === "GET" && url.pathname === "/api/items") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(allSummaries()));
+      return;
+    }
+
+    // Single item routes
+    const itemMatch = url.pathname.match(/^\/api\/items\/(\d+)$/);
+    if (itemMatch) {
+      const id = parseInt(itemMatch[1], 10);
+
+      if (req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(fullItem(id)));
+        return;
+      }
+
+      if (req.method === "PATCH") {
+        const fields = await parseBody(req);
+        const item = requireItem(id);
+        const allowed = ["title", "description", "status"];
+        const title = allowed.includes("title") && fields.title !== undefined ? fields.title : item.title;
+        const desc = allowed.includes("description") && fields.description !== undefined ? fields.description : item.description;
+        const status = allowed.includes("status") && fields.status !== undefined ? fields.status : item.status;
+        stmts.updateItem.run(title, desc, status, now(), id);
+        const updated = fullItem(id);
+        broadcast();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(updated));
+        return;
+      }
+
+      if (req.method === "DELETE") {
+        requireItem(id);
+        db.prepare("DELETE FROM items WHERE id = ?").run(id);
+        broadcast();
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ deleted: id }));
-      } catch (e) {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: e.message }));
+        return;
       }
-      return;
     }
-  }
 
-  // Checklist routes: /api/items/:id/checklist[/:cid]
-  const clMatch = url.pathname.match(/^\/api\/items\/(\d+)\/checklist(?:\/(\d+))?$/);
-  if (clMatch) {
-    const itemId = parseInt(clMatch[1], 10);
-    const cid = clMatch[2] ? parseInt(clMatch[2], 10) : null;
+    // Checklist routes
+    const clMatch = url.pathname.match(/^\/api\/items\/(\d+)\/checklist(?:\/(\d+))?$/);
+    if (clMatch) {
+      const itemId = parseInt(clMatch[1], 10);
+      const cid = clMatch[2] ? parseInt(clMatch[2], 10) : null;
 
-    // POST — add checklist item
-    if (req.method === "POST" && cid === null) {
-      let body = "";
-      req.on("data", chunk => { body += chunk; });
-      req.on("end", () => {
-        try {
-          const { label, parent_id } = JSON.parse(body);
-          if (!label || typeof label !== "string" || !label.trim()) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "label is required" }));
-            return;
-          }
-          const data = load();
-          const item = getItem(data, itemId);
-          if (parent_id !== undefined && parent_id !== null) {
-            const allIds = allChecklistIds(item.checklist);
-            if (!allIds.includes(parent_id)) {
-              res.writeHead(404, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "parent not found" }));
-              return;
-            }
-          }
-          const entry = { id: data.nextChecklistId++, label: label.trim(), checked: false, position: 0, children: [] };
-          if (parent_id !== undefined && parent_id !== null) {
-            const parent = findChecklist(item.checklist, parent_id);
-            entry.position = parent.children.length;
-            parent.children.push(entry);
-          } else {
-            entry.position = item.checklist.length;
-            item.checklist.push(entry);
-          }
-          item.updated_at = now();
-          save(data);
-          res.writeHead(201, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(entry));
-        } catch (e) {
+      if (req.method === "POST" && cid === null) {
+        const { label, parent_id } = await parseBody(req);
+        if (!label || typeof label !== "string" || !label.trim()) {
           res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: e.message }));
+          res.end(JSON.stringify({ error: "label is required" }));
+          return;
         }
-      });
-      return;
-    }
-
-    // PATCH — update checklist item
-    if (req.method === "PATCH" && cid !== null) {
-      let body = "";
-      req.on("data", chunk => { body += chunk; });
-      req.on("end", () => {
-        try {
-          const fields = JSON.parse(body);
-          const data = load();
-          const item = getItem(data, itemId);
-          const entry = findChecklist(item.checklist, cid);
-          if (!entry) {
+        requireItem(itemId);
+        if (parent_id != null) {
+          const parent = stmts.getChecklistItem.get(parent_id, itemId);
+          if (!parent) {
             res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "checklist item not found" }));
+            res.end(JSON.stringify({ error: "parent not found" }));
             return;
           }
-          if (fields.label !== undefined) entry.label = fields.label;
-          if (fields.checked !== undefined) entry.checked = fields.checked;
-          item.updated_at = now();
-          save(data);
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(entry));
-        } catch (e) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: e.message }));
         }
-      });
-      return;
-    }
+        const position = parent_id != null
+          ? stmts.countChecklistByParent.get(itemId, parent_id).cnt
+          : stmts.countTopChecklist.get(itemId).cnt;
+        const result = stmts.addChecklist.run(itemId, parent_id ?? null, label.trim(), position);
+        broadcast();
+        res.writeHead(201, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ id: Number(result.lastInsertRowid), label: label.trim(), checked: false, position, children: [] }));
+        return;
+      }
 
-    // DELETE — delete checklist item
-    if (req.method === "DELETE" && cid !== null) {
-      try {
-        const data = load();
-        const item = getItem(data, itemId);
-        if (!removeChecklist(item.checklist, cid)) {
+      if (req.method === "PATCH" && cid !== null) {
+        const fields = await parseBody(req);
+        const entry = stmts.getChecklistItem.get(cid, itemId);
+        if (!entry) {
           res.writeHead(404, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "checklist item not found" }));
           return;
         }
-        item.updated_at = now();
-        save(data);
+        stmts.updateChecklist.run(
+          fields.label ?? entry.label,
+          fields.checked !== undefined ? (fields.checked ? 1 : 0) : entry.checked,
+          cid
+        );
+        const updated = stmts.getChecklistItem.get(cid, itemId);
+        broadcast();
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ deleted: cid }));
-      } catch (e) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: e.message }));
+        res.end(JSON.stringify({ ...updated, checked: !!updated.checked }));
+        return;
       }
-      return;
-    }
-  }
 
-  // Add human comment
-  const commentMatch = url.pathname.match(/^\/api\/items\/(\d+)\/comments$/);
-  if (commentMatch && req.method === "POST") {
-    const id = parseInt(commentMatch[1], 10);
-    let body = "";
-    req.on("data", chunk => { body += chunk; });
-    req.on("end", () => {
-      try {
-        const { body: commentBody } = JSON.parse(body);
-        if (!commentBody || typeof commentBody !== "string" || !commentBody.trim()) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "body is required" }));
+      if (req.method === "DELETE" && cid !== null) {
+        const entry = stmts.getChecklistItem.get(cid, itemId);
+        if (!entry) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "checklist item not found" }));
           return;
         }
-        const data = load();
-        const item = getItem(data, id);
-        const comment = {
-          id: data.nextCommentId++,
-          author: "human",
-          body: commentBody.trim(),
-          created_at: now(),
-        };
-        item.comments.push(comment);
-        item.updated_at = now();
-        save(data);
-        res.writeHead(201, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(comment));
-      } catch (e) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: e.message }));
+        deleteChecklistRecursive(cid);
+        broadcast();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ deleted: cid }));
+        return;
       }
-    });
-    return;
-  }
+    }
 
-  res.writeHead(404, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error: "Not found" }));
+    // Add human comment
+    const commentMatch = url.pathname.match(/^\/api\/items\/(\d+)\/comments$/);
+    if (commentMatch && req.method === "POST") {
+      const id = parseInt(commentMatch[1], 10);
+      const { body: commentBody } = await parseBody(req);
+      if (!commentBody || typeof commentBody !== "string" || !commentBody.trim()) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "body is required" }));
+        return;
+      }
+      requireItem(id);
+      const ts = now();
+      const result = stmts.addComment.run(id, "human", commentBody.trim(), ts);
+      const item = requireItem(id);
+      stmts.updateItem.run(item.title, item.description, item.status, ts, id);
+      broadcast();
+      res.writeHead(201, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ id: Number(result.lastInsertRowid), author: "human", body: commentBody.trim(), created_at: ts }));
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not found" }));
+  } catch (e) {
+    const code = e.message.includes("not found") ? 404 : 400;
+    res.writeHead(code, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: e.message }));
+  }
 });
 
 httpServer.listen(UI_PORT, "0.0.0.0", () => {
-  // Write to stderr so it doesn't interfere with MCP stdio transport
+  process.stderr.write(`Backlog DB: ${DB_PATH}\n`);
   process.stderr.write(`Backlog kanban UI: http://0.0.0.0:${UI_PORT}\n`);
 });
 
-// ── start ──────────────────────────────────────────────────────────────────
+// ── graceful shutdown ─────────────────────────────────────────────────────
+
+process.on("SIGINT", () => { db.close(); process.exit(0); });
+process.on("SIGTERM", () => { db.close(); process.exit(0); });
+
+// ── start MCP ─────────────────────────────────────────────────────────────
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

@@ -53,8 +53,10 @@ agent-backlog/
 
 | Environment Variable | Default | Description |
 |---|---|---|
-| `BACKLOG_FILE` | `./agent-backlog.json` | Path to the backlog data file |
+| `BACKLOG_FILE` | `<git-root>/.backlog.db` | Path to the SQLite database |
 | `BACKLOG_UI_PORT` | `3456` | Port for the kanban web UI |
+
+The database is automatically created in the project's git root directory. Each project gets its own isolated backlog. SQLite WAL mode is enabled for concurrent read access.
 
 ## Installation
 
