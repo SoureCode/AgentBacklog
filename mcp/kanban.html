@@ -317,7 +317,12 @@ header h1 { font-size: 18px; font-weight: 600; }
 </head>
 <body>
 <header>
-  <h1>Backlog</h1>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <h1>Backlog</h1>
+    <select id="project-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;font-size:13px;font-family:inherit;cursor:pointer;">
+      <option value="">Select project...</option>
+    </select>
+  </div>
   <span class="refresh-info" id="connection-status">Connecting...</span>
 </header>
 
@@ -346,6 +351,12 @@ const COLUMNS = [
 let allItems = [];
 let draggedId = null;
 let openModalItemId = null;
+let currentProject = null;
+let evtSource = null;
+
+function apiBase() {
+  return currentProject ? '/api/projects/' + encodeURIComponent(currentProject) : '';
+}
 
 function autoGrow(textarea) {
   const resize = () => { textarea.style.height = 'auto'; textarea.style.height = textarea.scrollHeight + 'px'; };
@@ -399,20 +410,53 @@ function apiDelete(path) {
 }
 
 async function fetchItems() {
+  if (!currentProject) return;
   try {
-    const res = await fetch('/api/items');
+    const res = await fetch(apiBase() + '/items');
     allItems = await res.json();
     render();
   } catch (e) { console.error('Failed to fetch items:', e); }
 }
 
 async function fetchItem(id) {
-  return apiFetch('/api/items/' + id);
+  return apiFetch(apiBase() + '/items/' + id);
 }
 
 async function updateStatus(id, status) {
-  try { await apiPatch('/api/items/' + id, { status }); await fetchItems(); }
+  if (!currentProject) return;
+  try { await apiPatch(apiBase() + '/items/' + id, { status }); await fetchItems(); }
   catch (e) { console.error('Failed to update item:', e); }
+}
+
+async function loadProjects() {
+  try {
+    const res = await fetch('/api/projects');
+    const projects = await res.json();
+    const select = document.getElementById('project-select');
+    select.replaceChildren(el('option', { value: '', textContent: 'Select project...' }));
+    for (const p of projects) {
+      const label = p.slug + ' (' + p.open + '/' + p.in_progress + '/' + p.done + ')';
+      const opt = el('option', { value: p.slug, textContent: label });
+      if (p.slug === currentProject) opt.selected = true;
+      select.appendChild(opt);
+    }
+  } catch (e) { console.error('Failed to load projects:', e); }
+}
+
+function selectProject(slug) {
+  if (slug === currentProject) return;
+  currentProject = slug;
+  allItems = [];
+  render();
+  if (evtSource) { evtSource.close(); evtSource = null; }
+  if (slug) {
+    history.replaceState(null, '', '/project/' + encodeURIComponent(slug));
+    connectSSE();
+  } else {
+    history.replaceState(null, '', '/');
+    document.getElementById('connection-status').textContent = 'No project selected';
+    document.getElementById('connection-status').style.color = 'var(--text-muted)';
+  }
 }
 
 // Refresh modal in place
@@ -663,7 +707,7 @@ function showDescriptionEditor(section, item) {
 
   saveBtn.addEventListener('click', async () => {
     saveBtn.disabled = true;
-    await apiPatch('/api/items/' + item.id, { description: textarea.value });
+    await apiPatch(apiBase() + '/items/' + item.id, { description: textarea.value });
     await refreshModal();
   });
   cancelBtn.addEventListener('click', () => refreshModal());
@@ -694,7 +738,7 @@ function buildChecklistSection(item) {
     const label = addInput.value.trim();
     if (!label) return;
     addBtn.disabled = true;
-    await apiPost('/api/items/' + item.id + '/checklist', { label });
+    await apiPost(apiBase() + '/items/' + item.id + '/checklist', { label });
     await refreshModal();
   });
   addInput.addEventListener('keydown', e => {
@@ -717,7 +761,7 @@ function buildChecklistDom(items, itemId, parentId) {
     const check = el('button', { className: 'cl-check' + (c.checked ? ' checked' : ''), textContent: c.checked ? '\u2713' : '' });
     check.addEventListener('click', async (e) => {
       e.stopPropagation();
-      await apiPatch('/api/items/' + itemId + '/checklist/' + c.id, { checked: !c.checked });
+      await apiPatch(apiBase() + '/items/' + itemId + '/checklist/' + c.id, { checked: !c.checked });
       await refreshModal();
     });
     row.appendChild(check);
@@ -749,7 +793,7 @@ function buildChecklistDom(items, itemId, parentId) {
     const delBtn = el('button', { className: 'btn-icon danger', textContent: '\u2715', 'title': 'Delete' });
     delBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      await apiDelete('/api/items/' + itemId + '/checklist/' + c.id);
+      await apiDelete(apiBase() + '/items/' + itemId + '/checklist/' + c.id);
       await refreshModal();
     });
     actions.appendChild(delBtn);
@@ -779,7 +823,7 @@ function showEditChecklistItem(row, itemId, c) {
     const label = input.value.trim();
     if (!label) return;
     saveBtn.disabled = true;
-    await apiPatch('/api/items/' + itemId + '/checklist/' + c.id, { label });
+    await apiPatch(apiBase() + '/items/' + itemId + '/checklist/' + c.id, { label });
     await refreshModal();
   });
   cancelBtn.addEventListener('click', () => refreshModal());
@@ -808,7 +852,7 @@ function showAddChildForm(row, itemId, parentId) {
     const label = input.value.trim();
     if (!label) return;
     addBtn.disabled = true;
-    await apiPost('/api/items/' + itemId + '/checklist', { label, parent_id: parentId });
+    await apiPost(apiBase() + '/items/' + itemId + '/checklist', { label, parent_id: parentId });
     await refreshModal();
   });
   cancelBtn.addEventListener('click', () => form.remove());
@@ -851,7 +895,7 @@ function buildCommentsSection(item) {
     const text = textarea.value.trim();
     if (!text) return;
     submitBtn.disabled = true;
-    await apiPost('/api/items/' + item.id + '/comments', { body: text });
+    await apiPost(apiBase() + '/items/' + item.id + '/comments', { body: text });
     await refreshModal();
   });
   textarea.addEventListener('keydown', e => {
@@ -875,7 +919,7 @@ document.getElementById('modal-close-btn').addEventListener('click', closeModal)
 document.getElementById('modal-delete-btn').addEventListener('click', async () => {
   if (!openModalItemId) return;
   if (!confirm('Delete this backlog item? This cannot be undone.')) return;
-  await apiDelete('/api/items/' + openModalItemId);
+  await apiDelete(apiBase() + '/items/' + openModalItemId);
   closeModal();
 });
 document.getElementById('modal-overlay').addEventListener('click', e => {
@@ -888,8 +932,10 @@ document.addEventListener('keydown', e => {
 // ── Live updates via SSE ──────────────────────────────────────────────────
 
 function connectSSE() {
+  if (!currentProject) return;
   const statusEl = document.getElementById('connection-status');
-  const evtSource = new EventSource('/api/events');
+  if (evtSource) evtSource.close();
+  evtSource = new EventSource(apiBase() + '/events');
 
   evtSource.addEventListener('update', e => {
     try { allItems = JSON.parse(e.data); render(); }
@@ -899,7 +945,17 @@ function connectSSE() {
   evtSource.onopen = () => { statusEl.textContent = 'Live'; statusEl.style.color = '#3fb950'; };
   evtSource.onerror = () => { statusEl.textContent = 'Reconnecting...'; statusEl.style.color = '#d29922'; };
 }
-connectSSE();
+
+// Project selector
+document.getElementById('project-select').addEventListener('change', (e) => {
+  selectProject(e.target.value);
+});
+
+// Detect project from URL path
+function initFromUrl() {
+  const m = location.pathname.match(/^\/project\/(.+?)(?:#|$)/);
+  if (m) currentProject = decodeURIComponent(m[1]);
+}
 
 // Open/close modal from URL hash (back/forward navigation)
 function syncFromHash(pushHistory = true) {
@@ -911,8 +967,16 @@ function syncFromHash(pushHistory = true) {
   }
 }
 window.addEventListener('popstate', () => syncFromHash(false));
-// Initial load — wait for first render then check hash
-setTimeout(() => syncFromHash(false), 100);
+
+// Init
+initFromUrl();
+loadProjects().then(() => {
+  if (currentProject) {
+    document.getElementById('project-select').value = currentProject;
+    connectSSE();
+  }
+  setTimeout(() => syncFromHash(false), 100);
+});
 </script>
 </body>
 </html>

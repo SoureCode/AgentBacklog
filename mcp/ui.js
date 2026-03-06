@@ -1,0 +1,316 @@
+#!/usr/bin/env node
+import { createServer } from "http";
+import { readFileSync, existsSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+import {
+  openDatabase, prepareStatements, loadRegistry,
+  now, requireItem, fullItem, allSummaries, deleteChecklistRecursive,
+  VersionConflictError,
+} from "./db.js";
+
+const UI_PORT = parseInt(process.env.BACKLOG_UI_PORT ?? "3456", 10);
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const KANBAN_HTML = readFileSync(join(__dirname, "kanban.html"), "utf8");
+
+// ── project database pool ─────────────────────────────────────────────────
+
+const dbPool = new Map(); // slug → { db, stmts }
+
+function getProject(slug) {
+  if (dbPool.has(slug)) return dbPool.get(slug);
+
+  const registry = loadRegistry();
+  const project = registry.projects[slug];
+  if (!project) return null;
+  if (!existsSync(project.db)) return null;
+
+  const db = openDatabase(project.db);
+  const stmts = prepareStatements(db);
+  const entry = { db, stmts, ...project };
+  dbPool.set(slug, entry);
+  return entry;
+}
+
+function listProjects() {
+  const registry = loadRegistry();
+  const projects = [];
+  for (const [slug, project] of Object.entries(registry.projects)) {
+    const exists = existsSync(project.db);
+    if (exists) {
+      // Get summary counts
+      try {
+        const p = getProject(slug);
+        if (p) {
+          const items = p.stmts.listItems.all();
+          const open = items.filter((i) => i.status === "open").length;
+          const inProgress = items.filter((i) => i.status === "in_progress").length;
+          const done = items.filter((i) => i.status === "done").length;
+          projects.push({ slug, root: project.root, open, in_progress: inProgress, done, total: items.length });
+        }
+      } catch {
+        projects.push({ slug, root: project.root, error: true });
+      }
+    }
+  }
+  return projects;
+}
+
+// ── SSE clients per project ───────────────────────────────────────────────
+
+const sseClients = new Map(); // slug → Set<res>
+
+function broadcastProject(slug) {
+  const clients = sseClients.get(slug);
+  if (!clients || clients.size === 0) return;
+  const project = getProject(slug);
+  if (!project) return;
+  const data = allSummaries(project.stmts);
+  const msg = `event: update\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of clients) {
+    try { res.write(msg); } catch { clients.delete(res); }
+  }
+}
+
+// Poll for changes (since MCP server writes directly to DB, not through us)
+setInterval(() => {
+  for (const slug of sseClients.keys()) {
+    if (sseClients.get(slug).size > 0) {
+      broadcastProject(slug);
+    }
+  }
+}, 2000);
+
+// ── HTTP helpers ──────────────────────────────────────────────────────────
+
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+    });
+    req.on("error", reject);
+  });
+}
+
+function json(res, status, data) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(data));
+}
+
+// ── HTTP server ───────────────────────────────────────────────────────────
+
+const httpServer = createServer(async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
+
+  const url = new URL(req.url, `http://localhost:${UI_PORT}`);
+
+  try {
+    // Serve kanban HTML
+    if (req.method === "GET" && (url.pathname === "/" || url.pathname.match(/^\/project\/.+$/))) {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(KANBAN_HTML);
+      return;
+    }
+
+    // List projects
+    if (req.method === "GET" && url.pathname === "/api/projects") {
+      json(res, 200, listProjects());
+      return;
+    }
+
+    // Project-scoped API routes: /api/projects/:slug/...
+    const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/(.+)$/);
+    if (!projectMatch) {
+      json(res, 404, { error: "Not found" });
+      return;
+    }
+
+    const slug = decodeURIComponent(projectMatch[1]);
+    const path = "/" + projectMatch[2];
+    const project = getProject(slug);
+
+    if (!project) {
+      json(res, 404, { error: `Project "${slug}" not found or database missing` });
+      return;
+    }
+
+    const { stmts } = project;
+
+    // SSE
+    if (req.method === "GET" && path === "/events") {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      res.write(`event: update\ndata: ${JSON.stringify(allSummaries(stmts))}\n\n`);
+      if (!sseClients.has(slug)) sseClients.set(slug, new Set());
+      sseClients.get(slug).add(res);
+      req.on("close", () => { sseClients.get(slug)?.delete(res); });
+      return;
+    }
+
+    // List items
+    if (req.method === "GET" && path === "/items") {
+      json(res, 200, allSummaries(stmts));
+      return;
+    }
+
+    // Single item routes
+    const itemMatch = path.match(/^\/items\/(\d+)$/);
+    if (itemMatch) {
+      const id = parseInt(itemMatch[1], 10);
+
+      if (req.method === "GET") {
+        json(res, 200, fullItem(stmts, id));
+        return;
+      }
+
+      if (req.method === "PATCH") {
+        const fields = await parseBody(req);
+        const item = requireItem(stmts, id);
+        const versionHeader = req.headers["if-match"];
+        const expectedVersion = versionHeader ? parseInt(versionHeader, 10) : fields.version;
+        if (expectedVersion !== undefined && expectedVersion !== item.version) {
+          res.writeHead(409, { "Content-Type": "application/json", ETag: String(item.version) });
+          res.end(JSON.stringify({ error: "Version conflict", current: fullItem(stmts, id) }));
+          return;
+        }
+        const result = stmts.updateItem.run(
+          fields.title ?? item.title,
+          fields.description ?? item.description,
+          fields.status ?? item.status,
+          now(),
+          id,
+          item.version
+        );
+        if (result.changes === 0) {
+          const current = fullItem(stmts, id);
+          res.writeHead(409, { "Content-Type": "application/json", ETag: String(current.version) });
+          res.end(JSON.stringify({ error: "Version conflict", current }));
+          return;
+        }
+        const updated = fullItem(stmts, id);
+        broadcastProject(slug);
+        res.writeHead(200, { "Content-Type": "application/json", ETag: String(updated.version) });
+        res.end(JSON.stringify(updated));
+        return;
+      }
+
+      if (req.method === "DELETE") {
+        requireItem(stmts, id);
+        stmts.deleteItem.run(id);
+        broadcastProject(slug);
+        json(res, 200, { deleted: id });
+        return;
+      }
+    }
+
+    // Checklist routes
+    const clMatch = path.match(/^\/items\/(\d+)\/checklist(?:\/(\d+))?$/);
+    if (clMatch) {
+      const itemId = parseInt(clMatch[1], 10);
+      const cid = clMatch[2] ? parseInt(clMatch[2], 10) : null;
+
+      if (req.method === "POST" && cid === null) {
+        const { label, parent_id } = await parseBody(req);
+        if (!label || typeof label !== "string" || !label.trim()) {
+          json(res, 400, { error: "label is required" });
+          return;
+        }
+        const item = requireItem(stmts, itemId);
+        if (parent_id != null) {
+          const parent = stmts.getChecklistItem.get(parent_id, itemId);
+          if (!parent) { json(res, 404, { error: "parent not found" }); return; }
+        }
+        const position = parent_id != null
+          ? stmts.countChecklistByParent.get(itemId, parent_id).cnt
+          : stmts.countTopChecklist.get(itemId).cnt;
+        const result = stmts.addChecklist.run(itemId, parent_id ?? null, label.trim(), position);
+        stmts.touchItem.run(now(), itemId, item.version);
+        broadcastProject(slug);
+        json(res, 201, { id: Number(result.lastInsertRowid), label: label.trim(), checked: false, position, children: [] });
+        return;
+      }
+
+      if (req.method === "PATCH" && cid !== null) {
+        const fields = await parseBody(req);
+        const item = requireItem(stmts, itemId);
+        const entry = stmts.getChecklistItem.get(cid, itemId);
+        if (!entry) { json(res, 404, { error: "checklist item not found" }); return; }
+        stmts.updateChecklist.run(
+          fields.label ?? entry.label,
+          fields.checked !== undefined ? (fields.checked ? 1 : 0) : entry.checked,
+          cid
+        );
+        stmts.touchItem.run(now(), itemId, item.version);
+        const updated = stmts.getChecklistItem.get(cid, itemId);
+        broadcastProject(slug);
+        json(res, 200, { ...updated, checked: !!updated.checked });
+        return;
+      }
+
+      if (req.method === "DELETE" && cid !== null) {
+        const item = requireItem(stmts, itemId);
+        const entry = stmts.getChecklistItem.get(cid, itemId);
+        if (!entry) { json(res, 404, { error: "checklist item not found" }); return; }
+        deleteChecklistRecursive(stmts, cid);
+        stmts.touchItem.run(now(), itemId, item.version);
+        broadcastProject(slug);
+        json(res, 200, { deleted: cid });
+        return;
+      }
+    }
+
+    // Add human comment
+    const commentMatch = path.match(/^\/items\/(\d+)\/comments$/);
+    if (commentMatch && req.method === "POST") {
+      const id = parseInt(commentMatch[1], 10);
+      const { body: commentBody } = await parseBody(req);
+      if (!commentBody || typeof commentBody !== "string" || !commentBody.trim()) {
+        json(res, 400, { error: "body is required" });
+        return;
+      }
+      const item = requireItem(stmts, id);
+      const ts = now();
+      const result = stmts.addComment.run(id, "human", commentBody.trim(), ts);
+      stmts.touchItem.run(ts, id, item.version);
+      broadcastProject(slug);
+      json(res, 201, { id: Number(result.lastInsertRowid), author: "human", body: commentBody.trim(), created_at: ts });
+      return;
+    }
+
+    json(res, 404, { error: "Not found" });
+  } catch (e) {
+    if (e instanceof VersionConflictError) {
+      json(res, 409, { error: e.message, current: e.currentItem });
+      return;
+    }
+    const code = e.message.includes("not found") ? 404 : 400;
+    json(res, code, { error: e.message });
+  }
+});
+
+// ── graceful shutdown ─────────────────────────────────────────────────────
+
+function shutdown() {
+  for (const { db } of dbPool.values()) {
+    try { db.close(); } catch { /* ignore */ }
+  }
+  process.exit(0);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
+// ── start ─────────────────────────────────────────────────────────────────
+
+httpServer.listen(UI_PORT, "0.0.0.0", () => {
+  console.log(`Backlog UI: http://localhost:${UI_PORT}`);
+});

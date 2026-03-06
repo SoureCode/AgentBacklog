@@ -1,8 +1,27 @@
 # Agent Backlog
 
-A Claude Code plugin for managing agent task backlogs with a live kanban UI.
+A Claude Code plugin for managing agent task backlogs with a central kanban UI.
 
-## Structure
+## Architecture
+
+```
+MCP Server (per session, stdio)         Central UI (one instance, HTTP)
+┌─────────────────────────────┐         ┌──────────────────────────────┐
+│  node mcp/server.js         │         │  node mcp/ui.js              │
+│  - Pure MCP tools (stdio)   │         │  - Project picker            │
+│  - Opens project's .backlog │─write──>│  - Kanban board per project  │
+│  - Registers in registry    │  .db    │  - Reads registry to find    │
+│  - One per Claude session   │         │    all project databases     │
+└─────────────────────────────┘         │  - Single port, all projects │
+                                        └──────────────────────────────┘
+                                          reads ~/.config/agent-backlog/
+                                                  projects.json
+```
+
+- **MCP server** (`server.js`): Spawned by Claude Code per session via stdio. Opens the project's `.backlog.db` and registers its path in `~/.config/agent-backlog/projects.json`.
+- **UI server** (`ui.js`): Run once manually. Reads the registry to discover all projects. Opens each project's SQLite database directly. Serves a single kanban UI with a project selector dropdown.
+
+## Plugin Structure
 
 ```
 agent-backlog/
@@ -12,54 +31,69 @@ agent-backlog/
 ├── agents/
 │   └── task-planner.md       # Codebase-aware task planning agent
 ├── commands/
-│   ├── backlog.md            # /backlog - view or search the backlog
-│   ├── backlog-create.md     # /backlog-create - create a new task
-│   ├── backlog-next.md       # /backlog-next - find what to work on next
-│   └── backlog-done.md       # /backlog-done - mark a task as complete
+│   ├── backlog.md            # /backlog - view or search
+│   ├── backlog-create.md     # /backlog-create - create a task
+│   ├── backlog-next.md       # /backlog-next - find next task
+│   └── backlog-done.md       # /backlog-done - complete a task
 ├── skills/
 │   └── backlog-manager/
-│       └── SKILL.md          # Auto-triggered backlog management skill
+│       └── SKILL.md          # Auto-triggered skill
 └── mcp/
-    ├── server.js             # MCP server + HTTP kanban UI
-    ├── kanban.html           # Kanban board UI
+    ├── db.js                 # Shared database module + registry
+    ├── server.js             # MCP server (stdio, no HTTP)
+    ├── ui.js                 # Central UI server (HTTP)
+    ├── kanban.html           # Kanban board with project picker
     └── package.json
 ```
 
 ## Features
 
-- **MCP Tools**: Create, update, search, and organize backlog items with checklists, dependencies, and comments
-- **Kanban UI**: Live-updating board at `http://localhost:3456` (configurable via `BACKLOG_UI_PORT`)
+- **MCP Tools**: 11 tools for CRUD, checklists, dependencies, comments, and search
+- **Optimistic Locking**: Version-based conflict detection for concurrent agent access
+- **Project Aware**: Auto-detects git root, stores `.backlog.db` per project
+- **Central UI**: Single kanban server at `http://localhost:3456` with project selector
 - **Slash Commands**: `/backlog`, `/backlog-create`, `/backlog-next`, `/backlog-done`
-- **Agent**: Task planner that explores the codebase to create well-structured tasks
-- **Skill**: Automatically activates when discussing tasks, backlog, or what to work on next
+- **Agent**: Task planner that explores the codebase to create structured tasks
+- **Skill**: Automatically activates when discussing tasks or backlog
 
-## MCP Tools
+## Usage
 
-| Tool | Purpose |
-|---|---|
-| `backlog_list` | List items (optional status filter) |
-| `backlog_get` | Get a single item by id |
-| `backlog_create` | Create a new item |
-| `backlog_update` | Update title, description, or status |
-| `backlog_search` | Search by keyword |
-| `checklist_add` | Add a checklist item |
-| `checklist_update` | Toggle checked or change label |
-| `checklist_delete` | Remove a checklist item |
-| `comment_add` | Append a comment |
-| `dependency_add` | Add a dependency edge |
-| `dependency_remove` | Remove a dependency edge |
+### Start the UI (once)
+
+```bash
+node mcp/ui.js
+# or: npx agent-backlog-ui
+```
+
+Open `http://localhost:3456` — select a project from the dropdown.
+
+### Install the plugin
+
+```
+/plugin install /path/to/AgentBacklog
+```
+
+The MCP server starts automatically per Claude Code session. It registers the project in the central registry so the UI can discover it.
 
 ## Configuration
 
 | Environment Variable | Default | Description |
 |---|---|---|
 | `BACKLOG_FILE` | `<git-root>/.backlog.db` | Path to the SQLite database |
-| `BACKLOG_UI_PORT` | `3456` | Port for the kanban web UI |
+| `BACKLOG_UI_PORT` | `3456` | Port for the central kanban UI |
 
-The database is automatically created in the project's git root directory. Each project gets its own isolated backlog. SQLite WAL mode is enabled for concurrent read access.
+## MCP Tools
 
-## Installation
-
-```
-/plugin install /path/to/AgentBacklog
-```
+| Tool | Purpose | Version required? |
+|---|---|---|
+| `backlog_list` | List items (optional status filter) | No |
+| `backlog_get` | Get a single item by id | No |
+| `backlog_create` | Create a new item | No |
+| `backlog_update` | Update title, description, or status | **Yes** |
+| `backlog_search` | Search by keyword | No |
+| `checklist_add` | Add a checklist item | **Yes** |
+| `checklist_update` | Toggle checked or change label | **Yes** |
+| `checklist_delete` | Remove a checklist item | **Yes** |
+| `comment_add` | Append a comment | No |
+| `dependency_add` | Add a dependency edge | **Yes** |
+| `dependency_remove` | Remove a dependency edge | **Yes** |
