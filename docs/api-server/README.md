@@ -56,6 +56,8 @@ Set `BACKLOG_API_URL` and `BACKLOG_API_KEY` as environment variables on the MCP 
 
 ## Configuration
 
+See [../configuration.md](../configuration.md) for all environment variables.
+
 | Environment Variable | Default | Description |
 |---|---|---|
 | `BACKLOG_API_PORT` | `4000` | Port the server listens on |
