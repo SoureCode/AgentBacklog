@@ -70,6 +70,7 @@ function broadcastProject(slug) {
   const data = store.listItems();
   const msg = `event: update\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) {
+    if (res.writableEnded) { clients.delete(res); continue; }
     try { res.write(msg); } catch (e) { logger.warn("api:sse-write-error", { slug, error: e.message }); clients.delete(res); }
   }
 }
@@ -473,12 +474,20 @@ if (command === "create-project") {
   function shutdown() {
     clearInterval(pollInterval);
     logger.info("api:shutdown", { port });
+    // Close all active SSE connections so httpServer.close() can finish
+    for (const [, clients] of sseClients) {
+      for (const res of clients) {
+        try { res.end(); } catch { /* ignore */ }
+      }
+    }
+    sseClients.clear();
     for (const [, store] of storePool) {
       try { store.close(); } catch { /* ignore */ }
     }
     storePool.clear();
-    httpServer.close();
-    process.exit(0);
+    httpServer.close(() => process.exit(0));
+    // Force exit if server hasn't closed within 5 s
+    setTimeout(() => process.exit(0), 5000).unref();
   }
 
   process.on("SIGINT", shutdown);

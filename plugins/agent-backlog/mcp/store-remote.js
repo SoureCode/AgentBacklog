@@ -1,6 +1,8 @@
 import { VersionConflictError } from "./db.js";
 import { logger } from "./logger.js";
 
+const REQUEST_TIMEOUT_MS = parseInt(process.env.BACKLOG_REQUEST_TIMEOUT_MS ?? "10000", 10);
+
 export class RemoteStore {
   constructor(apiUrl, apiKey) {
     this.apiUrl = apiUrl.replace(/\/+$/, "");
@@ -13,14 +15,29 @@ export class RemoteStore {
 
   async _fetch(path, options = {}) {
     const url = `${this.apiUrl}${path}`;
-    const res = await fetch(url, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-        ...options.headers,
-      },
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+          ...options.headers,
+        },
+      });
+    } catch (err) {
+      if (err.name === "AbortError") {
+        const msg = `Request timed out after ${REQUEST_TIMEOUT_MS}ms: ${path}`;
+        logger.error("remote:timeout", { path, timeoutMs: REQUEST_TIMEOUT_MS });
+        throw new Error(msg);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (res.status === 409) {
       const body = await res.json();

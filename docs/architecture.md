@@ -15,6 +15,7 @@ For client setup see [claude-code.md](claude-code.md) or [copilot-cli.md](copilo
 | `BACKLOG_UI_PORT` | `3456` | Port for the kanban UI |
 | `BACKLOG_API_URL` | — | API server URL (enables remote/team mode) |
 | `BACKLOG_API_KEY` | — | API key for the project (enables remote/team mode) |
+| `BACKLOG_REQUEST_TIMEOUT_MS` | `10000` | Timeout (ms) for HTTP requests from MCP server to API server (remote mode) |
 | `LOG_LEVEL` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
 | `BACKLOG_LOG_DIR` | `~/.config/agent-backlog/logs` | Directory for log files |
 

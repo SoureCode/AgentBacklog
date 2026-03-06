@@ -131,6 +131,7 @@ function broadcastProject(slug) {
   const data = allSummaries(project.stmts);
   const msg = `event: update\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) {
+    if (res.writableEnded) { clients.delete(res); continue; }
     try { res.write(msg); } catch (e) { logger.warn("ui:sse-write-error", { slug, error: e.message }); clients.delete(res); }
   }
 }
@@ -392,9 +393,10 @@ async function handleRequest(req, res) {
 // ── exported startUI function ─────────────────────────────────────────────
 
 let pollInterval = null;
+let httpServer = null;
 
 export function startUI(port) {
-  const httpServer = createServer(handleRequest);
+  httpServer = createServer(handleRequest);
 
   // Poll for DB changes from MCP servers (local mode only)
   if (!isRemoteMode) {
@@ -416,10 +418,21 @@ export function startUI(port) {
 
 export function stopUI() {
   if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+  // Close all active SSE connections so httpServer.close() can finish
+  for (const [, clients] of sseClients) {
+    for (const res of clients) {
+      try { res.end(); } catch { /* ignore */ }
+    }
+  }
+  sseClients.clear();
   for (const { db } of dbPool.values()) {
     try { db.close(); } catch { /* ignore */ }
   }
   dbPool.clear();
+  if (httpServer) {
+    httpServer.close();
+    httpServer = null;
+  }
 }
 
 // ── standalone mode ───────────────────────────────────────────────────────
@@ -442,7 +455,9 @@ if (isMain) {
   function shutdown() {
     releaseUILeadership();
     stopUI();
-    process.exit(0);
+    // stopUI() called httpServer.close() — give it a moment then exit
+    setTimeout(() => process.exit(0), 1000).unref();
+    process.exitCode = 0;
   }
 
   process.on("SIGINT", shutdown);
