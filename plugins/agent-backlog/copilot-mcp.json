@@ -1,0 +1,6 @@
+{
+  "agent-backlog": {
+    "command": "node",
+    "args": ["${PLUGIN_ROOT}/mcp/server.js"]
+  }
+}
