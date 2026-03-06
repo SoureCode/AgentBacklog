@@ -1,0 +1,23 @@
+{
+  "name": "sourecode-backlog",
+  "owner": {
+    "name": "SoureCode"
+  },
+  "metadata": {
+    "description": "Agent task backlog manager with kanban UI for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "agent-backlog",
+      "source": "./",
+      "description": "Agent task backlog manager with a kanban UI. Provides MCP tools for creating, tracking, and organizing backlog items with checklists, dependencies, comments, and keyword search.",
+      "version": "1.0.0",
+      "author": {
+        "name": "SoureCode"
+      },
+      "repository": "https://github.com/SoureCode/AgentBacklog",
+      "license": "MIT",
+      "keywords": ["backlog", "kanban", "tasks", "project-management"]
+    }
+  ]
+}

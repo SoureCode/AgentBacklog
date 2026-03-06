@@ -15,10 +15,20 @@ A Claude Code plugin for managing agent task backlogs with a kanban UI.
 
 ## Installation
 
-### From GitHub
+### Via marketplace (recommended)
+
+Add the marketplace and install the plugin:
 
 ```bash
-claude plugin install --git https://github.com/SoureCode/AgentBacklog.git
+claude plugin marketplace add SoureCode/AgentBacklog
+claude plugin install agent-backlog@sourecode-backlog
+```
+
+### For a specific project only
+
+```bash
+claude plugin marketplace add SoureCode/AgentBacklog --scope project
+claude plugin install agent-backlog@sourecode-backlog --scope project
 ```
 
 ### From a local clone
@@ -27,7 +37,28 @@ claude plugin install --git https://github.com/SoureCode/AgentBacklog.git
 git clone https://github.com/SoureCode/AgentBacklog.git
 cd AgentBacklog
 npm install --prefix mcp
-claude plugin install .
+claude plugin marketplace add .
+claude plugin install agent-backlog@sourecode-backlog
+```
+
+### Recommend to your team
+
+Add this to your project's `.claude/settings.json` so team members are prompted to install automatically:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "sourecode-backlog": {
+      "source": {
+        "source": "github",
+        "repo": "SoureCode/AgentBacklog"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "agent-backlog@sourecode-backlog": true
+  }
+}
 ```
 
 ## How it works
@@ -102,7 +133,8 @@ Tools marked **Yes** require passing the item's current `version` number (from `
 ```
 AgentBacklog/
 ├── .claude-plugin/
-│   └── plugin.json           # Plugin metadata
+│   ├── plugin.json           # Plugin metadata
+│   └── marketplace.json      # Marketplace manifest
 ├── .mcp.json                 # MCP server configuration
 ├── agents/
 │   └── task-planner.md       # Codebase-aware task planning agent
