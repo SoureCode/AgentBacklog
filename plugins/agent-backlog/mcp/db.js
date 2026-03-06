@@ -45,7 +45,11 @@ export function unregisterProject(projectRoot) {
 
 export function openDatabase(dbPath) {
   const db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
+  // Switch from WAL to DELETE journal mode so every write flushes directly
+  // to the .db file, making it git-committable after each action.
+  // wal_checkpoint(TRUNCATE) ensures any prior WAL content is merged first.
+  db.pragma("wal_checkpoint(TRUNCATE)");
+  db.pragma("journal_mode = DELETE");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
 
