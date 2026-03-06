@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { join } from "path";
+import { request } from "http";
 import { execSync } from "child_process";
 import {
   openDatabase, prepareStatements, registerProject,
@@ -287,28 +288,85 @@ server.tool(
 
 const UI_PORT = parseInt(process.env.BACKLOG_UI_PORT ?? "3456", 10);
 let isUILeader = false;
+let uiServer = null;
 
-async function tryStartUI() {
+async function claimAndStartUI() {
   const result = tryBecomeUILeader(UI_PORT);
-  if (result.isLeader) {
-    isUILeader = true;
-    await startUI(UI_PORT);
-    process.stderr.write(`Backlog UI started: http://localhost:${UI_PORT}\n`);
-  } else {
-    process.stderr.write(`Backlog UI already running on port ${result.port}\n`);
-  }
+  if (!result.isLeader) return false;
+  isUILeader = true;
+  uiServer = await startUI(UI_PORT);
+
+  // If the HTTP server crashes, release leadership so another session can take over
+  uiServer.on("error", (err) => {
+    process.stderr.write(`UI server error: ${err.message}\n`);
+    releaseUILeadership();
+    isUILeader = false;
+    uiServer = null;
+  });
+
+  // If the server closes unexpectedly (not from our shutdown), release
+  uiServer.on("close", () => {
+    if (isUILeader) {
+      process.stderr.write("UI server closed unexpectedly, releasing leadership\n");
+      releaseUILeadership();
+      isUILeader = false;
+      uiServer = null;
+    }
+  });
+
+  process.stderr.write(`Backlog UI started: http://localhost:${UI_PORT}\n`);
+  return true;
 }
 
-await tryStartUI();
+// Health check: actually try to connect to the port, don't just trust PID
+function healthCheckUI(port) {
+  return new Promise((resolve) => {
+    const req = request({ hostname: "127.0.0.1", port, path: "/api/projects", method: "GET", timeout: 2000 }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+}
 
-// Periodically check if the UI leader is still alive; take over if not
+await claimAndStartUI();
+if (!isUILeader) {
+  const lock = getUILeaderPort();
+  process.stderr.write(`Backlog UI already running on port ${lock ?? UI_PORT}\n`);
+}
+
+// Periodically:
+// - Non-leaders: check if leader is alive via HTTP health check, take over if dead
+// - Leaders: self-check that our HTTP server is still listening, restart if crashed
 const leaderCheckInterval = setInterval(async () => {
-  if (isUILeader) return;
+  if (isUILeader) {
+    // Self-check: is our server still actually listening?
+    if (!uiServer || !uiServer.listening) {
+      process.stderr.write("UI server no longer listening, restarting...\n");
+      releaseUILeadership();
+      isUILeader = false;
+      uiServer = null;
+      await claimAndStartUI();
+    }
+    return;
+  }
+
+  // Non-leader: check if UI is reachable
   const port = getUILeaderPort();
   if (port === null) {
-    // Leader died — try to take over
+    // Lock gone — PID dead, take over immediately
     process.stderr.write("UI leader gone, attempting takeover...\n");
-    await tryStartUI();
+    await claimAndStartUI();
+    return;
+  }
+
+  // Lock exists and PID alive — but is the HTTP server actually responding?
+  const alive = await healthCheckUI(port);
+  if (!alive) {
+    process.stderr.write("UI leader not responding, attempting takeover...\n");
+    await claimAndStartUI();
   }
 }, 5000);
 
