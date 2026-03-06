@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
 import { join, dirname, basename } from "path";
 import { homedir } from "os";
 
@@ -266,4 +266,58 @@ export function bumpVersion(stmts, id, version) {
   if (result.changes === 0) {
     throw new VersionConflictError(id, version, fullItem(stmts, id));
   }
+}
+
+// ── UI leader election ────────────────────────────────────────────────────
+
+const LOCK_PATH = join(REGISTRY_DIR, "ui.lock");
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readLock() {
+  if (!existsSync(LOCK_PATH)) return null;
+  try {
+    return JSON.parse(readFileSync(LOCK_PATH, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeLock(pid, port) {
+  mkdirSync(REGISTRY_DIR, { recursive: true });
+  writeFileSync(LOCK_PATH, JSON.stringify({ pid, port, started: now() }) + "\n", "utf8");
+}
+
+function removeLock() {
+  try { unlinkSync(LOCK_PATH); } catch { /* ignore */ }
+}
+
+export function tryBecomeUILeader(port) {
+  const lock = readLock();
+  if (lock && isProcessAlive(lock.pid)) {
+    return { isLeader: false, port: lock.port };
+  }
+  // Stale lock or no lock — claim it
+  writeLock(process.pid, port);
+  return { isLeader: true, port };
+}
+
+export function releaseUILeadership() {
+  const lock = readLock();
+  if (lock && lock.pid === process.pid) {
+    removeLock();
+  }
+}
+
+export function getUILeaderPort() {
+  const lock = readLock();
+  if (lock && isProcessAlive(lock.pid)) return lock.port;
+  return null;
 }

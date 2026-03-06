@@ -8,7 +8,9 @@ import {
   openDatabase, prepareStatements, registerProject,
   now, requireItem, fullItem, allSummaries, deleteChecklistRecursive, wouldCycle,
   VersionConflictError, requireVersion, bumpVersion,
+  tryBecomeUILeader, releaseUILeadership, getUILeaderPort,
 } from "./db.js";
+import { startUI, stopUI } from "./ui.js";
 
 // ── database path ─────────────────────────────────────────────────────────
 
@@ -281,10 +283,49 @@ server.tool(
   }
 );
 
+// ── UI leader election ────────────────────────────────────────────────────
+
+const UI_PORT = parseInt(process.env.BACKLOG_UI_PORT ?? "3456", 10);
+let isUILeader = false;
+
+async function tryStartUI() {
+  const result = tryBecomeUILeader(UI_PORT);
+  if (result.isLeader) {
+    isUILeader = true;
+    await startUI(UI_PORT);
+    process.stderr.write(`Backlog UI started: http://localhost:${UI_PORT}\n`);
+  } else {
+    process.stderr.write(`Backlog UI already running on port ${result.port}\n`);
+  }
+}
+
+await tryStartUI();
+
+// Periodically check if the UI leader is still alive; take over if not
+const leaderCheckInterval = setInterval(async () => {
+  if (isUILeader) return;
+  const port = getUILeaderPort();
+  if (port === null) {
+    // Leader died — try to take over
+    process.stderr.write("UI leader gone, attempting takeover...\n");
+    await tryStartUI();
+  }
+}, 5000);
+
 // ── graceful shutdown ─────────────────────────────────────────────────────
 
-process.on("SIGINT", () => { db.close(); process.exit(0); });
-process.on("SIGTERM", () => { db.close(); process.exit(0); });
+function shutdown() {
+  clearInterval(leaderCheckInterval);
+  if (isUILeader) {
+    releaseUILeadership();
+    stopUI();
+  }
+  db.close();
+  process.exit(0);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 // ── start MCP ─────────────────────────────────────────────────────────────
 

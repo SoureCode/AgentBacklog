@@ -1,21 +1,20 @@
 #!/usr/bin/env node
 import { createServer } from "http";
 import { readFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
+import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import {
   openDatabase, prepareStatements, loadRegistry,
   now, requireItem, fullItem, allSummaries, deleteChecklistRecursive,
-  VersionConflictError,
+  VersionConflictError, tryBecomeUILeader, releaseUILeadership,
 } from "./db.js";
 
-const UI_PORT = parseInt(process.env.BACKLOG_UI_PORT ?? "3456", 10);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban.html"), "utf8");
 
 // ── project database pool ─────────────────────────────────────────────────
 
-const dbPool = new Map(); // slug → { db, stmts }
+const dbPool = new Map();
 
 function getProject(slug) {
   if (dbPool.has(slug)) return dbPool.get(slug);
@@ -33,24 +32,22 @@ function getProject(slug) {
 }
 
 function listProjects() {
+  // Re-read registry every time so new projects appear without restart
   const registry = loadRegistry();
   const projects = [];
   for (const [slug, project] of Object.entries(registry.projects)) {
-    const exists = existsSync(project.db);
-    if (exists) {
-      // Get summary counts
-      try {
-        const p = getProject(slug);
-        if (p) {
-          const items = p.stmts.listItems.all();
-          const open = items.filter((i) => i.status === "open").length;
-          const inProgress = items.filter((i) => i.status === "in_progress").length;
-          const done = items.filter((i) => i.status === "done").length;
-          projects.push({ slug, root: project.root, open, in_progress: inProgress, done, total: items.length });
-        }
-      } catch {
-        projects.push({ slug, root: project.root, error: true });
+    if (!existsSync(project.db)) continue;
+    try {
+      const p = getProject(slug);
+      if (p) {
+        const items = p.stmts.listItems.all();
+        const open = items.filter((i) => i.status === "open").length;
+        const inProgress = items.filter((i) => i.status === "in_progress").length;
+        const done = items.filter((i) => i.status === "done").length;
+        projects.push({ slug, root: project.root, open, in_progress: inProgress, done, total: items.length });
       }
+    } catch {
+      projects.push({ slug, root: project.root, error: true });
     }
   }
   return projects;
@@ -58,7 +55,7 @@ function listProjects() {
 
 // ── SSE clients per project ───────────────────────────────────────────────
 
-const sseClients = new Map(); // slug → Set<res>
+const sseClients = new Map();
 
 function broadcastProject(slug) {
   const clients = sseClients.get(slug);
@@ -71,15 +68,6 @@ function broadcastProject(slug) {
     try { res.write(msg); } catch { clients.delete(res); }
   }
 }
-
-// Poll for changes (since MCP server writes directly to DB, not through us)
-setInterval(() => {
-  for (const slug of sseClients.keys()) {
-    if (sseClients.get(slug).size > 0) {
-      broadcastProject(slug);
-    }
-  }
-}, 2000);
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────
 
@@ -99,16 +87,16 @@ function json(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-// ── HTTP server ───────────────────────────────────────────────────────────
+// ── HTTP request handler ──────────────────────────────────────────────────
 
-const httpServer = createServer(async (req, res) => {
+async function handleRequest(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
-  const url = new URL(req.url, `http://localhost:${UI_PORT}`);
+  const url = new URL(req.url, `http://localhost`);
 
   try {
     // Serve kanban HTML
@@ -295,22 +283,59 @@ const httpServer = createServer(async (req, res) => {
     const code = e.message.includes("not found") ? 404 : 400;
     json(res, code, { error: e.message });
   }
-});
+}
 
-// ── graceful shutdown ─────────────────────────────────────────────────────
+// ── exported startUI function ─────────────────────────────────────────────
 
-function shutdown() {
+let pollInterval = null;
+
+export function startUI(port) {
+  const httpServer = createServer(handleRequest);
+
+  // Poll for DB changes from MCP servers
+  pollInterval = setInterval(() => {
+    for (const slug of sseClients.keys()) {
+      if (sseClients.get(slug).size > 0) {
+        broadcastProject(slug);
+      }
+    }
+  }, 2000);
+
+  return new Promise((resolve) => {
+    httpServer.listen(port, "0.0.0.0", () => {
+      resolve(httpServer);
+    });
+  });
+}
+
+export function stopUI() {
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
   for (const { db } of dbPool.values()) {
     try { db.close(); } catch { /* ignore */ }
   }
-  process.exit(0);
+  dbPool.clear();
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+// ── standalone mode ───────────────────────────────────────────────────────
 
-// ── start ─────────────────────────────────────────────────────────────────
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  const port = parseInt(process.env.BACKLOG_UI_PORT ?? "3456", 10);
+  const { isLeader } = tryBecomeUILeader(port);
+  if (!isLeader) {
+    console.log(`UI already running (see lock file). Use a different port or stop the other instance.`);
+    process.exit(1);
+  }
 
-httpServer.listen(UI_PORT, "0.0.0.0", () => {
-  console.log(`Backlog UI: http://localhost:${UI_PORT}`);
-});
+  await startUI(port);
+  console.log(`Backlog UI: http://localhost:${port}`);
+
+  function shutdown() {
+    releaseUILeadership();
+    stopUI();
+    process.exit(0);
+  }
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
