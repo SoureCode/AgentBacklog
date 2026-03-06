@@ -18,18 +18,34 @@ A plugin for Claude Code and GitHub Copilot CLI for managing agent task backlogs
 
 Choose the guide for your client:
 
-- **[Claude Code →](docs/claude-code.md)** — installation, hooks, slash commands, MCP config
-- **[GitHub Copilot CLI →](docs/copilot-cli.md)** — installation, hooks, slash commands, MCP config
-- **[API Server (Team Mode) →](docs/api-server.md)** — central server setup, REST endpoints, CLI commands
+- **[Claude Code →](docs/claude-code.md)** — installation, hooks, MCP config
+- **[GitHub Copilot CLI →](docs/copilot-cli.md)** — installation, hooks, MCP config
+- **[API Server (Team Mode) →](docs/api-server/README.md)** — central server setup, REST endpoints, CLI commands
+
+## Reference
+
+- **[MCP Tools →](docs/mcp-tools.md)** — full tool reference with version/locking notes
+- **[Architecture & Configuration →](docs/architecture.md)** — how local mode works, env vars, kanban UI
 
 ## Project Structure
 
 ```
 AgentBacklog/
 ├── docs/
-│   ├── claude-code.md                # Claude Code guide
-│   ├── copilot-cli.md                # GitHub Copilot CLI guide
-│   └── api-server.md                 # Team mode / API server guide
+│   ├── claude-code.md                # Claude Code setup guide
+│   ├── copilot-cli.md                # GitHub Copilot CLI setup guide
+│   ├── api-server/                   # Team mode / API server guide
+│   │   ├── README.md                 #   Overview, setup, CLI commands, config
+│   │   ├── items.md                  #   List, get, create, update items
+│   │   ├── search.md                 #   Keyword search
+│   │   ├── checklist.md              #   Checklist add/update/delete
+│   │   ├── comments.md               #   Append comments
+│   │   ├── dependencies.md           #   Add/remove dependency edges
+│   │   ├── events.md                 #   SSE live updates
+│   │   ├── projects.md               #   Admin project listing
+│   │   └── health.md                 #   Health check
+│   ├── mcp-tools.md                  # MCP tools reference
+│   └── architecture.md               # Local mode architecture & configuration
 ├── .claude-plugin/
 │   └── marketplace.json              # Marketplace manifest
 └── plugins/
@@ -64,4 +80,22 @@ AgentBacklog/
             ├── store-remote.js       # RemoteStore — HTTP client for API server
             ├── kanban.html           # Kanban board SPA
             └── package.json
+```
+
+## development
+
+Switch to the local plugin:
+
+```
+copilot plugin uninstall agent-backlog@sourecode-backlog
+copilot plugin install ./plugins/agent-backlog/
+pushd ~/.copilot/installed-plugins/_direct/agent-backlog/mcp && npm install && popd
+```
+
+Update plugin:
+
+```
+copilot plugin uninstall agent-backlog
+copilot plugin install ./plugins/agent-backlog/
+pushd ~/.copilot/installed-plugins/_direct/agent-backlog/mcp && npm install && popd
 ```
