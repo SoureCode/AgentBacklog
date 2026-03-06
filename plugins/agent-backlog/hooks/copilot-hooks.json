@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "[ -d node_modules ] || npm install --no-audit --no-fund",
+        "cwd": "mcp",
+        "timeoutSec": 120
+      }
+    ]
+  }
+}

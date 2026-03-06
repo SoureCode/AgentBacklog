@@ -1,6 +1,6 @@
 # Agent Backlog
 
-A Claude Code plugin for managing agent task backlogs with a kanban UI.
+A plugin for Claude Code and GitHub Copilot CLI for managing agent task backlogs with a kanban UI.
 
 ## Features
 
@@ -237,10 +237,13 @@ AgentBacklog/
 │   └── marketplace.json              # Marketplace manifest
 └── plugins/
     └── agent-backlog/                # Plugin root
-        ├── plugin.json               # Plugin metadata
+        ├── plugin.json               # Copilot CLI manifest
+        ├── .claude-plugin/
+        │   └── plugin.json           # Claude Code manifest
         ├── .mcp.json                 # MCP server configuration
         ├── hooks/
-        │   └── hooks.json            # SessionStart hook for npm install
+        │   ├── hooks.json            # SessionStart hook (Claude Code)
+        │   └── copilot-hooks.json    # sessionStart hook (Copilot CLI)
         ├── agents/
         │   ├── backlog-groomer.md    # Backlog health and maintenance agent
         │   ├── scope-analyzer.md     # Pre-work impact analysis agent
