@@ -695,6 +695,7 @@ function showDescriptionEditor(section, item) {
   const content = el('div', { className: 'section-content' });
   const textarea = el('textarea', { className: 'edit-textarea', 'placeholder': 'Description (supports markdown)' });
   textarea.value = item.description || '';
+  textarea.dataset.original = item.description || '';
   content.appendChild(textarea);
   autoGrow(textarea);
 
@@ -888,7 +889,7 @@ function buildCommentsSection(item) {
   }
 
   // Comment form
-  const textarea = autoGrow(el('textarea', { 'placeholder': 'Add a comment... (supports markdown)' }));
+  const textarea = autoGrow(el('textarea', { 'placeholder': 'Add a comment... (supports markdown)', 'data-original': '' }));
   const submitBtn = el('button', { textContent: 'Comment' });
 
   submitBtn.addEventListener('click', async () => {
@@ -938,7 +939,22 @@ function connectSSE() {
   evtSource = new EventSource(apiBase() + '/events');
 
   evtSource.addEventListener('update', e => {
-    try { allItems = JSON.parse(e.data); render(); }
+    try {
+      allItems = JSON.parse(e.data);
+      render();
+      loadProjects();
+      if (openModalItemId != null) {
+        // Guard: skip auto-refresh if the user has an unsaved edit in progress
+        const modalBody = document.getElementById('modal-body');
+        const textareas = modalBody ? modalBody.querySelectorAll('textarea') : [];
+        let isDirty = false;
+        for (const ta of textareas) {
+          if (document.activeElement === ta) { isDirty = true; break; }
+          if (ta.dataset.original !== undefined && ta.value !== ta.dataset.original) { isDirty = true; break; }
+        }
+        if (!isDirty) refreshModal();
+      }
+    }
     catch (err) { console.error('SSE parse error:', err); }
   });
 
