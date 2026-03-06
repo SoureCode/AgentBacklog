@@ -1,7 +1,7 @@
 ---
 name: backlog-manager
 description: >
-  Manages agent task backlog items via the agent-backlog MCP server (JSON store, not markdown files).
+  Manages agent task backlog items via the agent-backlog MCP server (SQLite store with optimistic locking).
   Use this skill whenever the user wants to interact with the project backlog — whether they ask about tasks,
   status, what to work on next, or want to create or update items. Trigger on any of these signals:
   "what's next", "show the backlog", "mark task as done/in-progress", "create a new task",
@@ -20,24 +20,44 @@ Every backlog item has:
 - `title` — plain descriptive title
 - `status` — `open` | `in_progress` | `done`
 - `description` — full markdown content (goal, implementation notes, acceptance criteria)
+- `version` — integer for optimistic locking (starts at 1, incremented on every mutation)
 - `checklist` — structured checklist items managed via checklist tools
 - `dependencies` — dependency edges managed via dependency tools
+- `comments` — append-only thread managed via comment tools
+
+## Optimistic locking (CRITICAL)
+
+Multiple agents may work on the same backlog concurrently. To prevent lost updates, **every mutating tool** (except `comment_add`) requires the item's current `version` number.
+
+### How it works
+
+1. Call `backlog_get` — note the `version` field in the response
+2. Pass that `version` to any update tool (`backlog_update`, `checklist_add`, etc.)
+3. If another agent modified the item since your read, the tool returns a **CONFLICT error** with the current item state
+4. On conflict: **re-fetch** with `backlog_get`, review the changes, then retry with the new version
+
+### Rules
+
+- **Always pass `version`** to mutating tools (except `comment_add`)
+- **After each successful mutation**, use the returned `item_version` (or re-fetch) for subsequent calls
+- **On CONFLICT**, do not retry blindly — read the updated item first, your changes may already be done or the context may have changed
+- `comment_add` is exempt from version checks because comments are append-only and never conflict
 
 ## MCP tools reference
 
-| Tool | Purpose |
-|---|---|
-| `backlog_list` | List all items (optional `status` filter: `open`, `in_progress`, `done`) |
-| `backlog_get` | Get a single item by id |
-| `backlog_create` | Create item (`title`, `description`, `status`) |
-| `backlog_update` | Update `title`, `description`, or `status` by id |
-| `checklist_add` | Add checklist item (`item_id`, `label`, optional `parent_id` for nesting) |
-| `checklist_update` | Toggle `checked` or change `label` (`item_id`, `id`, optional `label`/`checked`) |
-| `checklist_delete` | Remove a checklist item and its children |
-| `comment_add` | Append a permanent comment to an item (`item_id`, `body`) |
-| `dependency_add` | Mark that `item_id` depends on `depends_on_id` |
-| `dependency_remove` | Remove a dependency edge |
-| `backlog_search` | Search by keyword across title and description (optional `status` filter) |
+| Tool | Params | Version required? |
+|---|---|---|
+| `backlog_list` | optional `status` filter | No |
+| `backlog_get` | `id` | No |
+| `backlog_create` | `title`, `description`, `status` | No (new item) |
+| `backlog_update` | `id`, `version`, optional `title`/`description`/`status` | **Yes** |
+| `checklist_add` | `item_id`, `version`, `label`, optional `parent_id` | **Yes** |
+| `checklist_update` | `item_id`, `version`, `id`, optional `label`/`checked` | **Yes** |
+| `checklist_delete` | `item_id`, `version`, `id` | **Yes** |
+| `comment_add` | `item_id`, `body` | No |
+| `dependency_add` | `item_id`, `version`, `depends_on_id` | **Yes** |
+| `dependency_remove` | `item_id`, `version`, `depends_on_id` | **Yes** |
+| `backlog_search` | `query`, optional `status` | No |
 
 ## Task description format
 
@@ -81,19 +101,21 @@ Rules:
 
 ### Update task status
 
-1. Call `backlog_update` with the new `status`
-2. Valid transitions: `open` → `in_progress` → `done` (reversal also valid)
-3. For `done`, ensure all checklist items are checked via `checklist_update`
+1. Call `backlog_get` to get the current `version`
+2. Call `backlog_update` with the new `status` and the `version`
+3. Valid transitions: `open` → `in_progress` → `done` (reversal also valid)
+4. For `done`, ensure all checklist items are checked via `checklist_update` first
 
 ### Close a completed task
 
 When a task reaches `done`:
 
 1. **Write documentation** into the package's `docs/` directory (see bundle docs rules in CLAUDE.md)
-2. Call `backlog_update` with `status: "done"`
-3. Call `comment_add` with a note summarising what was done and any relevant outcome
+2. Call `backlog_get` to get the latest version
+3. Call `backlog_update` with `status: "done"` and `version`
+4. Call `comment_add` with a note summarising what was done and any relevant outcome
 
-**Always do steps 2 and 3 after finishing implementation** — never leave a completed task as `in_progress`.
+**Always do steps 2-4 after finishing implementation** — never leave a completed task as `in_progress`.
 
 ### Create a new task
 
@@ -101,8 +123,9 @@ When a task reaches `done`:
    - `title`: plain descriptive title
    - `description`: formatted per task description format above
    - `status`: `"open"`
-2. Add checklist items via `checklist_add`
-3. Add dependencies via `dependency_add`
+2. Note the returned `version` (will be 1)
+3. Add checklist items via `checklist_add` (pass `version`, use returned `item_version` for next call)
+4. Add dependencies via `dependency_add` (same version chaining)
 
 ### Find what to work on next
 
@@ -120,15 +143,28 @@ Present:
 
 Before beginning any implementation work on a backlog item:
 
-1. **Always re-fetch the item first** — call `backlog_get` to get the latest state. Another agent or a human may have updated the description, checklist, comments, or status since you last saw it. Read all comments carefully — they may contain decisions, clarifications, or instructions that change how you should proceed.
-2. Call `backlog_update` with `status: "in_progress"` on the chosen item
+1. **Always fetch the item first** — call `backlog_get` to get the latest state and `version`. Another agent or a human may have updated the description, checklist, comments, or status since you last saw it. Read all comments carefully — they may contain decisions, clarifications, or instructions that change how you should proceed.
+2. Call `backlog_update` with `status: "in_progress"` and `version`
 3. Work through the checklist **one item at a time, top to bottom**:
    - Read the checklist item
    - Do the work for that item
-   - Call `checklist_update` with `checked: true` on the item **before** moving to the next one
+   - Call `checklist_update` with `checked: true` — pass the current `version` (use `item_version` from the last successful mutation, or re-fetch)
    - For parent items with children: complete all children first, then check the parent
 4. Never batch-check multiple items at the end — the kanban UI shows live progress, so each check should reflect real completed work
 5. When all checklist items are done: call `backlog_update` with `status: "done"`, then call `comment_add` summarising what was done
+
+### Handle version conflicts
+
+If a tool returns a CONFLICT error:
+
+1. The error message tells you the item was modified by another agent
+2. Call `backlog_get` to fetch the latest state
+3. Review what changed — the other agent may have:
+   - Checked off checklist items you were about to check
+   - Changed the status or description
+   - Added comments with new instructions
+4. Adjust your plan based on the new state
+5. Retry your operation with the new `version`
 
 ### Search the backlog
 
@@ -145,5 +181,7 @@ Before beginning any implementation work on a backlog item:
 ## Important
 
 - Always use MCP tools
+- Always pass `version` to mutating tools (except `comment_add`)
+- On CONFLICT errors: re-fetch, review, then retry
 - Never delete items — they are preserved for history
 - When closing a done task: write docs first, then mark `done` and add a comment

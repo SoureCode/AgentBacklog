@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync } from "fs";
 import { execSync } from "child_process";
 import { createServer } from "http";
 import Database from "better-sqlite3";
@@ -34,6 +34,7 @@ db.exec(`
     title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 255),
     status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'done')),
     description TEXT NOT NULL DEFAULT '',
+    version INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -69,6 +70,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
 `);
 
+// Migration: add version column to existing databases
+try {
+  db.exec("ALTER TABLE items ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
+} catch {
+  // Column already exists
+}
+
 // ── prepared statements ───────────────────────────────────────────────────
 
 const stmts = {
@@ -76,10 +84,13 @@ const stmts = {
   listItemsByStatus: db.prepare("SELECT * FROM items WHERE status = ? ORDER BY id"),
   getItem: db.prepare("SELECT * FROM items WHERE id = ?"),
   createItem: db.prepare(
-    "INSERT INTO items (title, status, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+    "INSERT INTO items (title, status, description, version, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)"
   ),
   updateItem: db.prepare(
-    "UPDATE items SET title = ?, description = ?, status = ?, updated_at = ? WHERE id = ?"
+    "UPDATE items SET title = ?, description = ?, status = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?"
+  ),
+  touchItem: db.prepare(
+    "UPDATE items SET version = version + 1, updated_at = ? WHERE id = ? AND version = ?"
   ),
 
   getChecklist: db.prepare("SELECT * FROM checklist_items WHERE item_id = ? ORDER BY position"),
@@ -169,6 +180,7 @@ function summarize(item) {
     id: item.id,
     title: item.title,
     status: item.status,
+    version: item.version,
     updated_at: item.updated_at,
     dependencies: stmts.getDeps.all(item.id).map((d) => d.depends_on_id),
     checklist: total > 0 ? { total, done } : undefined,
@@ -188,7 +200,6 @@ function deleteChecklistRecursive(id) {
   stmts.deleteChecklist.run(id);
 }
 
-// Cycle detection for dependencies
 function wouldCycle(fromId, toId) {
   const visited = new Set();
   const stack = [toId];
@@ -202,6 +213,37 @@ function wouldCycle(fromId, toId) {
     }
   }
   return false;
+}
+
+// ── optimistic locking ────────────────────────────────────────────────────
+
+class VersionConflictError extends Error {
+  constructor(id, expectedVersion, currentItem) {
+    super(
+      `CONFLICT: BacklogItem ${id} has been modified by another agent ` +
+      `(your version: ${expectedVersion}, current version: ${currentItem.version}). ` +
+      `Re-fetch the item with backlog_get(id: ${id}) to see the latest state, ` +
+      `then retry your operation with the new version number.`
+    );
+    this.name = "VersionConflictError";
+    this.currentItem = currentItem;
+  }
+}
+
+function requireVersion(id, version) {
+  const item = requireItem(id);
+  if (item.version !== version) {
+    throw new VersionConflictError(id, version, fullItem(id));
+  }
+  return item;
+}
+
+function bumpVersion(id, version) {
+  const result = stmts.touchItem.run(now(), id, version);
+  if (result.changes === 0) {
+    const current = requireItem(id);
+    throw new VersionConflictError(id, version, fullItem(id));
+  }
 }
 
 // ── SSE ───────────────────────────────────────────────────────────────────
@@ -221,27 +263,27 @@ function broadcast() {
 
 // ── MCP server ────────────────────────────────────────────────────────────
 
-const server = new McpServer({ name: "agent-backlog", version: "2.0.0" });
+const server = new McpServer({ name: "agent-backlog", version: "3.0.0" });
 
 // ── backlog items ─────────────────────────────────────────────────────────
 
 server.tool(
   "backlog_list",
-  "List backlog items, optionally filtered by status.",
+  "List backlog items, optionally filtered by status. Each item includes a 'version' field for optimistic locking.",
   { status: z.enum(["open", "in_progress", "done"]).optional() },
   ({ status }) => ok(allSummaries(status))
 );
 
 server.tool(
   "backlog_get",
-  "Get a single backlog item with its checklist and dependencies.",
+  "Get a single backlog item with its full details. The returned 'version' field must be passed to any subsequent update operation on this item.",
   { id: z.number().int() },
   ({ id }) => ok(fullItem(id))
 );
 
 server.tool(
   "backlog_create",
-  "Create a new backlog item.",
+  "Create a new backlog item. Returns the item with version 1.",
   {
     title: z.string().min(1).max(255),
     description: z.string().optional(),
@@ -258,22 +300,27 @@ server.tool(
 
 server.tool(
   "backlog_update",
-  "Update a backlog item's title, description, or status.",
+  "Update a backlog item's title, description, or status. Requires the 'version' from your last read of this item. If another agent modified the item since you read it, this will fail with a CONFLICT error — re-fetch with backlog_get and retry.",
   {
     id: z.number().int(),
+    version: z.number().int().describe("The version number from your last backlog_get. Required for conflict detection."),
     title: z.string().min(1).max(255).optional(),
     description: z.string().optional(),
     status: z.enum(["open", "in_progress", "done"]).optional(),
   },
-  ({ id, title, description, status }) => {
-    const item = requireItem(id);
-    stmts.updateItem.run(
+  ({ id, version, title, description, status }) => {
+    const item = requireVersion(id, version);
+    const result = stmts.updateItem.run(
       title ?? item.title,
       description ?? item.description,
       status ?? item.status,
       now(),
-      id
+      id,
+      version
     );
+    if (result.changes === 0) {
+      throw new VersionConflictError(id, version, fullItem(id));
+    }
     const updated = fullItem(id);
     broadcast();
     return ok(updated);
@@ -284,14 +331,15 @@ server.tool(
 
 server.tool(
   "checklist_add",
-  "Add a checklist item to a backlog item. Use parent_id to nest under an existing checklist item.",
+  "Add a checklist item to a backlog item. Requires the item's current 'version' for conflict detection. Use parent_id to nest under an existing checklist item.",
   {
     item_id: z.number().int(),
+    version: z.number().int().describe("The item's version number from your last backlog_get."),
     label: z.string().min(1),
     parent_id: z.number().int().optional(),
   },
-  ({ item_id, label, parent_id }) => {
-    requireItem(item_id);
+  ({ item_id, version, label, parent_id }) => {
+    requireVersion(item_id, version);
 
     let position;
     if (parent_id !== undefined) {
@@ -303,28 +351,31 @@ server.tool(
     }
 
     const result = stmts.addChecklist.run(item_id, parent_id ?? null, label, position);
+    bumpVersion(item_id, version);
     const entry = {
-      id: result.lastInsertRowid,
+      id: Number(result.lastInsertRowid),
       label,
       checked: false,
       position,
       children: [],
     };
     broadcast();
-    return ok(entry);
+    return ok({ ...entry, item_version: version + 1 });
   }
 );
 
 server.tool(
   "checklist_update",
-  "Update a checklist item's label or checked state.",
+  "Update a checklist item's label or checked state. Requires the parent item's current 'version' for conflict detection.",
   {
     item_id: z.number().int(),
+    version: z.number().int().describe("The item's version number from your last backlog_get."),
     id: z.number().int(),
     label: z.string().min(1).optional(),
     checked: z.boolean().optional(),
   },
-  ({ item_id, id, label, checked }) => {
+  ({ item_id, version, id, label, checked }) => {
+    requireVersion(item_id, version);
     const entry = stmts.getChecklistItem.get(id, item_id);
     if (!entry) throw new Error(`ChecklistItem ${id} not found on BacklogItem ${item_id}`);
     stmts.updateChecklist.run(
@@ -332,25 +383,29 @@ server.tool(
       checked !== undefined ? (checked ? 1 : 0) : entry.checked,
       id
     );
+    bumpVersion(item_id, version);
     const updated = stmts.getChecklistItem.get(id, item_id);
     broadcast();
-    return ok({ ...updated, checked: !!updated.checked });
+    return ok({ ...updated, checked: !!updated.checked, item_version: version + 1 });
   }
 );
 
 server.tool(
   "checklist_delete",
-  "Delete a checklist item (cascades to children).",
+  "Delete a checklist item (cascades to children). Requires the parent item's current 'version' for conflict detection.",
   {
     item_id: z.number().int(),
+    version: z.number().int().describe("The item's version number from your last backlog_get."),
     id: z.number().int(),
   },
-  ({ item_id, id }) => {
+  ({ item_id, version, id }) => {
+    requireVersion(item_id, version);
     const entry = stmts.getChecklistItem.get(id, item_id);
     if (!entry) throw new Error(`ChecklistItem ${id} not found on BacklogItem ${item_id}`);
     deleteChecklistRecursive(id);
+    bumpVersion(item_id, version);
     broadcast();
-    return ok({ deleted: id });
+    return ok({ deleted: id, item_version: version + 1 });
   }
 );
 
@@ -358,21 +413,17 @@ server.tool(
 
 server.tool(
   "comment_add",
-  "Append a comment to a backlog item. Comments are permanent and cannot be deleted. Author is always 'agent' via MCP; use the UI to add human comments.",
+  "Append a comment to a backlog item. Comments are append-only and do not require version checking. Author is always 'agent' via MCP; use the UI to add human comments.",
   {
     item_id: z.number().int(),
     body: z.string().min(1),
   },
   ({ item_id, body }) => {
-    requireItem(item_id);
+    const item = requireItem(item_id);
     const ts = now();
     const result = stmts.addComment.run(item_id, "agent", body, ts);
-    stmts.updateItem.run(
-      undefined, undefined, undefined, ts, item_id
-    );
-    // re-read to get proper values after partial update
-    const item = requireItem(item_id);
-    stmts.updateItem.run(item.title, item.description, item.status, ts, item_id);
+    // Bump version without conflict check — comments are append-only
+    stmts.touchItem.run(ts, item_id, item.version);
     const comment = { id: Number(result.lastInsertRowid), author: "agent", body, created_at: ts };
     broadcast();
     return ok(comment);
@@ -383,14 +434,15 @@ server.tool(
 
 server.tool(
   "dependency_add",
-  "Add a dependency: item_id depends on depends_on_id.",
+  "Add a dependency: item_id depends on depends_on_id. Requires the item's current 'version' for conflict detection.",
   {
     item_id: z.number().int(),
+    version: z.number().int().describe("The item's version number from your last backlog_get."),
     depends_on_id: z.number().int(),
   },
-  ({ item_id, depends_on_id }) => {
+  ({ item_id, version, depends_on_id }) => {
     if (item_id === depends_on_id) throw new Error("An item cannot depend on itself");
-    requireItem(item_id);
+    requireVersion(item_id, version);
     requireItem(depends_on_id);
 
     if (wouldCycle(item_id, depends_on_id)) {
@@ -398,25 +450,29 @@ server.tool(
     }
 
     stmts.addDep.run(item_id, depends_on_id);
+    bumpVersion(item_id, version);
     broadcast();
-    return ok({ item_id, depends_on_id });
+    return ok({ item_id, depends_on_id, item_version: version + 1 });
   }
 );
 
 server.tool(
   "dependency_remove",
-  "Remove a dependency between two items.",
+  "Remove a dependency between two items. Requires the item's current 'version' for conflict detection.",
   {
     item_id: z.number().int(),
+    version: z.number().int().describe("The item's version number from your last backlog_get."),
     depends_on_id: z.number().int(),
   },
-  ({ item_id, depends_on_id }) => {
+  ({ item_id, version, depends_on_id }) => {
+    requireVersion(item_id, version);
     const result = stmts.removeDep.run(item_id, depends_on_id);
     if (result.changes === 0) {
       throw new Error(`Dependency ${item_id} → ${depends_on_id} does not exist`);
     }
+    bumpVersion(item_id, version);
     broadcast();
-    return ok({ removed: { item_id, depends_on_id } });
+    return ok({ removed: { item_id, depends_on_id }, item_version: version + 1 });
   }
 );
 
@@ -424,7 +480,7 @@ server.tool(
 
 server.tool(
   "backlog_search",
-  "Search backlog items by one or more keywords. Supports quoted phrases (\"exact match\"). Items are ranked by relevance: title matches score higher than description matches. All tokens must appear somewhere in the item (AND logic by default). Optionally filter by status.",
+  "Search backlog items by one or more keywords. Supports quoted phrases (\"exact match\"). Items are ranked by relevance: title matches score higher than description matches. All tokens must appear somewhere in the item (AND logic). Optionally filter by status.",
   {
     query: z.string().min(1),
     status: z.enum(["open", "in_progress", "done"]).optional(),
@@ -525,17 +581,37 @@ const httpServer = createServer(async (req, res) => {
         return;
       }
 
+      // HTTP PATCH uses If-Match header for version (UI-friendly)
       if (req.method === "PATCH") {
         const fields = await parseBody(req);
         const item = requireItem(id);
-        const allowed = ["title", "description", "status"];
-        const title = allowed.includes("title") && fields.title !== undefined ? fields.title : item.title;
-        const desc = allowed.includes("description") && fields.description !== undefined ? fields.description : item.description;
-        const status = allowed.includes("status") && fields.status !== undefined ? fields.status : item.status;
-        stmts.updateItem.run(title, desc, status, now(), id);
+
+        // Version check via If-Match header or body field
+        const versionHeader = req.headers["if-match"];
+        const expectedVersion = versionHeader ? parseInt(versionHeader, 10) : fields.version;
+        if (expectedVersion !== undefined && expectedVersion !== item.version) {
+          res.writeHead(409, { "Content-Type": "application/json", "ETag": String(item.version) });
+          res.end(JSON.stringify({ error: "Version conflict", current: fullItem(id) }));
+          return;
+        }
+
+        const result = stmts.updateItem.run(
+          fields.title ?? item.title,
+          fields.description ?? item.description,
+          fields.status ?? item.status,
+          now(),
+          id,
+          item.version
+        );
+        if (result.changes === 0) {
+          const current = fullItem(id);
+          res.writeHead(409, { "Content-Type": "application/json", "ETag": String(current.version) });
+          res.end(JSON.stringify({ error: "Version conflict", current }));
+          return;
+        }
         const updated = fullItem(id);
         broadcast();
-        res.writeHead(200, { "Content-Type": "application/json" });
+        res.writeHead(200, { "Content-Type": "application/json", "ETag": String(updated.version) });
         res.end(JSON.stringify(updated));
         return;
       }
@@ -563,7 +639,7 @@ const httpServer = createServer(async (req, res) => {
           res.end(JSON.stringify({ error: "label is required" }));
           return;
         }
-        requireItem(itemId);
+        const item = requireItem(itemId);
         if (parent_id != null) {
           const parent = stmts.getChecklistItem.get(parent_id, itemId);
           if (!parent) {
@@ -576,6 +652,7 @@ const httpServer = createServer(async (req, res) => {
           ? stmts.countChecklistByParent.get(itemId, parent_id).cnt
           : stmts.countTopChecklist.get(itemId).cnt;
         const result = stmts.addChecklist.run(itemId, parent_id ?? null, label.trim(), position);
+        stmts.touchItem.run(now(), itemId, item.version);
         broadcast();
         res.writeHead(201, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ id: Number(result.lastInsertRowid), label: label.trim(), checked: false, position, children: [] }));
@@ -584,6 +661,7 @@ const httpServer = createServer(async (req, res) => {
 
       if (req.method === "PATCH" && cid !== null) {
         const fields = await parseBody(req);
+        const item = requireItem(itemId);
         const entry = stmts.getChecklistItem.get(cid, itemId);
         if (!entry) {
           res.writeHead(404, { "Content-Type": "application/json" });
@@ -595,6 +673,7 @@ const httpServer = createServer(async (req, res) => {
           fields.checked !== undefined ? (fields.checked ? 1 : 0) : entry.checked,
           cid
         );
+        stmts.touchItem.run(now(), itemId, item.version);
         const updated = stmts.getChecklistItem.get(cid, itemId);
         broadcast();
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -603,6 +682,7 @@ const httpServer = createServer(async (req, res) => {
       }
 
       if (req.method === "DELETE" && cid !== null) {
+        const item = requireItem(itemId);
         const entry = stmts.getChecklistItem.get(cid, itemId);
         if (!entry) {
           res.writeHead(404, { "Content-Type": "application/json" });
@@ -610,6 +690,7 @@ const httpServer = createServer(async (req, res) => {
           return;
         }
         deleteChecklistRecursive(cid);
+        stmts.touchItem.run(now(), itemId, item.version);
         broadcast();
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ deleted: cid }));
@@ -627,11 +708,10 @@ const httpServer = createServer(async (req, res) => {
         res.end(JSON.stringify({ error: "body is required" }));
         return;
       }
-      requireItem(id);
+      const item = requireItem(id);
       const ts = now();
       const result = stmts.addComment.run(id, "human", commentBody.trim(), ts);
-      const item = requireItem(id);
-      stmts.updateItem.run(item.title, item.description, item.status, ts, id);
+      stmts.touchItem.run(ts, id, item.version);
       broadcast();
       res.writeHead(201, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ id: Number(result.lastInsertRowid), author: "human", body: commentBody.trim(), created_at: ts }));
@@ -641,6 +721,11 @@ const httpServer = createServer(async (req, res) => {
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Not found" }));
   } catch (e) {
+    if (e instanceof VersionConflictError) {
+      res.writeHead(409, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: e.message, current: e.currentItem }));
+      return;
+    }
     const code = e.message.includes("not found") ? 404 : 400;
     res.writeHead(code, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: e.message }));
