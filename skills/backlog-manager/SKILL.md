@@ -1,7 +1,7 @@
 ---
 name: backlog-manager
 description: >
-  Manages agent task backlog items via the agent-backlog MCP server (SQLite store with optimistic locking).
+  Manages agent task backlog items via the agent-backlog MCP server.
   Use this skill whenever the user wants to interact with the project backlog — whether they ask about tasks,
   status, what to work on next, or want to create or update items. Trigger on any of these signals:
   "what's next", "show the backlog", "mark task as done/in-progress", "create a new task",
@@ -11,7 +11,7 @@ description: >
 
 # Backlog Manager
 
-Agent task backlog managed via the `agent-backlog` MCP server. Always use the MCP tools.
+Agent task backlog managed via the `agent-backlog` MCP server. Works in local mode (SQLite per project) or remote mode (central API server for team sharing). Always use the MCP tools — never read or modify the database directly.
 
 ## Data model
 
@@ -29,19 +29,16 @@ Every backlog item has:
 
 Multiple agents may work on the same backlog concurrently. To prevent lost updates, **every mutating tool** (except `comment_add`) requires the item's current `version` number.
 
-### How it works
-
 1. Call `backlog_get` — note the `version` field in the response
 2. Pass that `version` to any update tool (`backlog_update`, `checklist_add`, etc.)
 3. If another agent modified the item since your read, the tool returns a **CONFLICT error** with the current item state
 4. On conflict: **re-fetch** with `backlog_get`, review the changes, then retry with the new version
 
-### Rules
-
+Rules:
 - **Always pass `version`** to mutating tools (except `comment_add`)
 - **After each successful mutation**, use the returned `item_version` (or re-fetch) for subsequent calls
 - **On CONFLICT**, do not retry blindly — read the updated item first, your changes may already be done or the context may have changed
-- `comment_add` is exempt from version checks because comments are append-only and never conflict
+- `comment_add` is exempt from version checks because comments are append-only
 
 ## MCP tools reference
 
@@ -67,12 +64,12 @@ The `description` field holds only narrative content. Checklist steps go in the 
 ## Goal
 
 What needs to be built and why — one or two paragraphs. Include enough context for an implementer
-to understand scope (e.g. which bundle or component, rough area of the codebase).
+to understand scope (e.g. which component, rough area of the codebase).
 
 ## Notes
 
 - Architectural decisions already made, constraints, gotchas
-- RFC references, relevant interface or service names
+- Relevant interface or service names
 - Anything an implementer needs to know before starting
 
 ## Acceptance
@@ -103,19 +100,18 @@ Rules:
 
 1. Call `backlog_get` to get the current `version`
 2. Call `backlog_update` with the new `status` and the `version`
-3. Valid transitions: `open` → `in_progress` → `done` (reversal also valid)
+3. Valid transitions: `open` -> `in_progress` -> `done` (reversal also valid)
 4. For `done`, ensure all checklist items are checked via `checklist_update` first
 
 ### Close a completed task
 
 When a task reaches `done`:
 
-1. **Write documentation** into the package's `docs/` directory (see bundle docs rules in CLAUDE.md)
-2. Call `backlog_get` to get the latest version
-3. Call `backlog_update` with `status: "done"` and `version`
-4. Call `comment_add` with a note summarising what was done and any relevant outcome
+1. Call `backlog_get` to get the latest version
+2. Call `backlog_update` with `status: "done"` and `version`
+3. Call `comment_add` with a note summarising what was done and any relevant outcome
 
-**Always do steps 2-4 after finishing implementation** — never leave a completed task as `in_progress`.
+**Always do these steps after finishing implementation** — never leave a completed task as `in_progress`.
 
 ### Create a new task
 
@@ -170,7 +166,7 @@ If a tool returns a CONFLICT error:
 
 1. Call `backlog_search` with a `query` string (case-insensitive substring match on title and description)
 2. Optionally pass `status` to narrow results to `open`, `in_progress`, or `done`
-3. Use this instead of `backlog_list` when the user is looking for a specific topic, RFC, or keyword
+3. Use this instead of `backlog_list` when the user is looking for a specific topic or keyword
 
 ### Check what's blocking a task
 
@@ -180,8 +176,8 @@ If a tool returns a CONFLICT error:
 
 ## Important
 
-- Always use MCP tools
+- Always use MCP tools — never read or modify the database directly
 - Always pass `version` to mutating tools (except `comment_add`)
 - On CONFLICT errors: re-fetch, review, then retry
 - Never delete items — they are preserved for history
-- When closing a done task: write docs first, then mark `done` and add a comment
+- When closing a done task: mark `done` and add a summary comment
