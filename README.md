@@ -56,24 +56,36 @@ agent-backlog/
 - **Agent**: Task planner that explores the codebase to create structured tasks
 - **Skill**: Automatically activates when discussing tasks or backlog
 
+## Installation
+
+### From GitHub
+
+```bash
+claude plugin install --git https://github.com/SoureCode/AgentBacklog.git
+```
+
+### From a local clone
+
+```bash
+git clone https://github.com/SoureCode/AgentBacklog.git
+cd AgentBacklog
+npm install --prefix mcp
+claude plugin install .
+```
+
+After installing, the MCP server starts automatically per Claude Code session. It registers the project in the central registry so the UI can discover it.
+
 ## Usage
 
 ### Start the UI (once)
 
+The UI starts automatically via leader election among MCP server instances. If you want to run it standalone:
+
 ```bash
 node mcp/ui.js
-# or: npx agent-backlog-ui
 ```
 
 Open `http://localhost:3456` — select a project from the dropdown.
-
-### Install the plugin
-
-```
-/plugin install /path/to/AgentBacklog
-```
-
-The MCP server starts automatically per Claude Code session. It registers the project in the central registry so the UI can discover it.
 
 ## Configuration
 
