@@ -15,7 +15,7 @@ A Claude Code plugin for managing agent task backlogs with a kanban UI.
 
 ## Installation
 
-### Via marketplace (recommended)
+### From the marketplace
 
 Add the marketplace and install the plugin:
 
@@ -24,12 +24,14 @@ claude plugin marketplace add SoureCode/AgentBacklog
 claude plugin install agent-backlog@sourecode-backlog
 ```
 
-### For a specific project only
+To install for a specific project only:
 
 ```bash
 claude plugin marketplace add SoureCode/AgentBacklog --scope project
 claude plugin install agent-backlog@sourecode-backlog --scope project
 ```
+
+npm dependencies (`better-sqlite3`, `@modelcontextprotocol/sdk`) are installed automatically on first session start via a `SessionStart` hook.
 
 ### From a local clone
 
@@ -43,7 +45,7 @@ claude plugin install agent-backlog@sourecode-backlog
 
 ### Recommend to your team
 
-Add this to your project's `.claude/settings.json` so team members are prompted to install automatically:
+Add to your project's `.claude/settings.json` so team members are prompted to install:
 
 ```json
 {
@@ -61,9 +63,21 @@ Add this to your project's `.claude/settings.json` so team members are prompted 
 }
 ```
 
+### Update
+
+```bash
+claude plugin update agent-backlog@sourecode-backlog
+```
+
+### Uninstall
+
+```bash
+claude plugin uninstall agent-backlog@sourecode-backlog
+```
+
 ## How it works
 
-Each Claude Code session spawns its own MCP server (`mcp/server.js`) via stdio. On startup, each server:
+Each Claude Code session spawns its own MCP server via stdio. On startup, each server:
 
 1. Detects the project root via `git rev-parse --show-toplevel`
 2. Opens (or creates) a `.backlog.db` SQLite database in the project root
@@ -136,6 +150,8 @@ AgentBacklog/
 │   ├── plugin.json           # Plugin metadata
 │   └── marketplace.json      # Marketplace manifest
 ├── .mcp.json                 # MCP server configuration
+├── hooks/
+│   └── hooks.json            # SessionStart hook for npm install
 ├── agents/
 │   └── task-planner.md       # Codebase-aware task planning agent
 ├── commands/
