@@ -66,3 +66,75 @@ rm -r ~/.config/agent-backlog
 # Remove the backlog database from each project (run per project)
 rm .backlog.db
 ```
+
+---
+
+## Team Mode
+
+Team mode connects to a central API server instead of a local SQLite file. See [api-server/README.md](api-server/README.md) to set up the server and obtain an API key.
+
+Once you have a URL and key, configure them as environment variables on the MCP server process.
+
+### Option A — System environment variables (simplest)
+
+Add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) and restart your terminal:
+
+```bash
+export BACKLOG_API_URL=http://your-server:4000
+export BACKLOG_API_KEY=sk-proj-abc123
+```
+
+Claude Code inherits these when it spawns the MCP server process.
+
+### Option B — Per-user MCP config
+
+Add an `env` block for the plugin's MCP server in `~/.claude.json`. This file is merged with the plugin's config, so you only need the env overrides — not the full command/args:
+
+```json
+{
+  "mcpServers": {
+    "agent-backlog": {
+      "env": {
+        "BACKLOG_API_URL": "http://your-server:4000",
+        "BACKLOG_API_KEY": "sk-proj-abc123"
+      }
+    }
+  }
+}
+```
+
+This applies to every project for that user.
+
+### Option C — Per-project config (recommended for teams)
+
+Each project on the API server has its own API key, so different repos can point at different backlogs. Split the config across two files:
+
+**`.claude/settings.json`** (commit this — safe to share):
+
+```json
+{
+  "mcpServers": {
+    "agent-backlog": {
+      "env": {
+        "BACKLOG_API_URL": "http://your-server:4000"
+      }
+    }
+  }
+}
+```
+
+**`.claude/settings.local.json`** (do not commit — add to `.gitignore`):
+
+```json
+{
+  "mcpServers": {
+    "agent-backlog": {
+      "env": {
+        "BACKLOG_API_KEY": "sk-proj-abc123"
+      }
+    }
+  }
+}
+```
+
+Claude Code merges both files, so the MCP server receives both variables. The URL is safe to commit; the key stays out of version control. Each team member adds only their own `settings.local.json`.

@@ -48,6 +48,21 @@ rm .backlog.db
 
 ---
 
+## Team Mode
+
+Team mode connects to a central API server instead of a local SQLite file. See [api-server/README.md](api-server/README.md) to set up the server and obtain an API key.
+
+Once you have a URL and key, set them as environment variables. Copilot CLI inherits environment variables from the shell it was launched in, so adding them to your shell profile is all that is needed.
+
+Add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) and restart your terminal:
+
+```bash
+export BACKLOG_API_URL=http://your-server:4000
+export BACKLOG_API_KEY=sk-proj-abc123
+```
+
+---
+
 ## Hooks
 
 > **Note:** The `sessionStart` hook is currently not working in GitHub Copilot CLI. Run `npm install` manually after install or update (see above).

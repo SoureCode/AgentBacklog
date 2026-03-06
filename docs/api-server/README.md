@@ -36,7 +36,10 @@ node mcp/api-server.js create-project my-project
 
 ### 3. Configure clients
 
-Set `BACKLOG_API_URL` and `BACKLOG_API_KEY` as environment variables on the MCP server process. See [claude-code.md](../claude-code.md) or [copilot-cli.md](../copilot-cli.md) for where to add them.
+Set `BACKLOG_API_URL` and `BACKLOG_API_KEY` as environment variables on the MCP server process:
+
+- **Claude Code** — see the [Team Mode section in claude-code.md](../claude-code.md#team-mode) for system env vars or a per-user `~/.claude.json` override
+- **Copilot CLI** — see the [Team Mode section in copilot-cli.md](../copilot-cli.md#team-mode) for system env vars
 
 ---
 
