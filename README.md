@@ -10,7 +10,7 @@ A Claude Code plugin for managing agent task backlogs with a kanban UI.
 - **Kanban UI** — Central web UI at `http://localhost:3456` with project selector and live updates via SSE
 - **Leader Election** — MCP server instances coordinate to run a single UI; automatic failover on crash
 - **Slash Commands** — `/backlog`, `/backlog-create`, `/backlog-next`
-- **Task Planner Agent** — Explores the codebase to create structured backlog items
+- **4 Agents** — Task Planner, Backlog Groomer, Task Implementer, and Scope Analyzer
 - **Backlog Manager Skill** — Automatically activates when discussing tasks or backlog
 
 ## Installation
@@ -152,7 +152,10 @@ AgentBacklog/
 ├── hooks/
 │   └── hooks.json            # SessionStart hook for npm install
 ├── agents/
-│   └── task-planner.md       # Codebase-aware task planning agent
+│   ├── backlog-groomer.md    # Backlog health and maintenance agent
+│   ├── scope-analyzer.md    # Pre-work impact analysis agent
+│   ├── task-implementer.md  # Task execution agent
+│   └── task-planner.md      # Codebase-aware task planning agent
 ├── commands/
 │   ├── backlog.md            # /backlog command
 │   ├── backlog-create.md     # /backlog-create command
