@@ -15,6 +15,33 @@ For client setup see [claude-code.md](claude-code.md) or [copilot-cli.md](copilo
 | `BACKLOG_UI_PORT` | `3456` | Port for the kanban UI |
 | `BACKLOG_API_URL` | — | API server URL (enables remote/team mode) |
 | `BACKLOG_API_KEY` | — | API key for the project (enables remote/team mode) |
+| `LOG_LEVEL` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
+| `BACKLOG_LOG_DIR` | `~/.config/agent-backlog/logs` | Directory for log files |
+
+---
+
+## Logging
+
+All server components (MCP server, kanban UI, API server) write structured JSON logs to:
+
+```
+~/.config/agent-backlog/logs/agent-backlog.log
+```
+
+Logs rotate automatically when the file reaches **10 MB**; up to **5** rotated files are kept (`.log.1` … `.log.5`). Multiple server instances writing concurrently is safe — each write uses `O_APPEND` for atomic line-level writes.
+
+Set `LOG_LEVEL=debug` to see every MCP tool call (input + output):
+
+```bash
+LOG_LEVEL=debug node mcp/server.js
+```
+
+Each log line is a JSON object:
+
+```json
+{"time":"2026-03-06T21:00:00.000Z","level":"info","msg":"ui:started","port":3456}
+{"time":"2026-03-06T21:00:01.000Z","level":"debug","msg":"tool:call","tool":"backlog_list","args":{}}
+```
 
 ---
 

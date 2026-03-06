@@ -1,4 +1,5 @@
 import { VersionConflictError } from "./db.js";
+import { logger } from "./logger.js";
 
 export class RemoteStore {
   constructor(apiUrl, apiKey) {
@@ -32,12 +33,16 @@ export class RemoteStore {
 
     if (res.status === 404) {
       const body = await res.json();
-      throw new Error(body.error || "Not found");
+      const err = new Error(body.error || "Not found");
+      logger.warn("remote:not-found", { path, error: err.message });
+      throw err;
     }
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `HTTP ${res.status}`);
+      const err = new Error(body.error || `HTTP ${res.status}`);
+      logger.error("remote:http-error", { path, status: res.status, error: err.message });
+      throw err;
     }
 
     return res.json();

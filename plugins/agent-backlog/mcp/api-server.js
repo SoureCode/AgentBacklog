@@ -16,6 +16,7 @@ import {
   AddCommentSchema,
   AddDependencySchema, RemoveDependencySchema,
 } from "./schemas.js";
+import { logger } from "./logger.js";
 
 // ── config ────────────────────────────────────────────────────────────────
 
@@ -31,7 +32,8 @@ function loadApiKeys() {
   if (!existsSync(API_KEYS_PATH)) return {};
   try {
     return JSON.parse(readFileSync(API_KEYS_PATH, "utf8"));
-  } catch {
+  } catch (e) {
+    logger.warn("api-keys:parse-error", { error: e.message });
     return {};
   }
 }
@@ -68,7 +70,7 @@ function broadcastProject(slug) {
   const data = store.listItems();
   const msg = `event: update\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) {
-    try { res.write(msg); } catch { clients.delete(res); }
+    try { res.write(msg); } catch (e) { logger.warn("api:sse-write-error", { slug, error: e.message }); clients.delete(res); }
   }
 }
 
@@ -153,7 +155,8 @@ async function handleRequest(req, res) {
           const inProgress = items.filter((i) => i.status === "in_progress").length;
           const done = items.filter((i) => i.status === "done").length;
           projects.push({ slug, open, in_progress: inProgress, done, total: items.length });
-        } catch {
+        } catch (e) {
+          logger.error("api:project-list-error", { slug, error: e.message });
           projects.push({ slug, error: true });
         }
       }
@@ -348,10 +351,17 @@ async function handleRequest(req, res) {
     json(res, 404, { error: "Not found" });
   } catch (e) {
     if (e instanceof VersionConflictError) {
+      logger.warn("api:version-conflict", {
+        path: url.pathname,
+        id: e.currentItem?.id,
+        currentVersion: e.currentItem?.version,
+        yourVersion: e.message.match(/your version: (\d+)/)?.[1],
+      });
       json(res, 409, { error: e.message, current: e.currentItem, id: 0, expectedVersion: 0 });
       return;
     }
     const code = e.message.includes("not found") ? 404 : 400;
+    logger.error("api:request-error", { method: req.method, path: url.pathname, status: code, error: e.message });
     json(res, code, { error: e.message });
   }
 }
@@ -456,11 +466,13 @@ if (command === "create-project") {
 
   const httpServer = createServer(handleRequest);
   httpServer.listen(port, "0.0.0.0", () => {
+    logger.info("api:started", { port });
     console.log(`Agent Backlog API server listening on http://0.0.0.0:${port}`);
   });
 
   function shutdown() {
     clearInterval(pollInterval);
+    logger.info("api:shutdown", { port });
     for (const [, store] of storePool) {
       try { store.close(); } catch { /* ignore */ }
     }

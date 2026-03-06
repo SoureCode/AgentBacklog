@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { logger } from "./logger.js";
 import { join, dirname, resolve, isAbsolute } from "path";
 import { request } from "http";
 import { execSync } from "child_process";
@@ -72,10 +73,10 @@ let slug;
 if (!isRemoteMode) {
   const DB_PATH = process.env.BACKLOG_FILE ?? join(PROJECT_ROOT, ".backlog.db");
   slug = registerProject(PROJECT_ROOT, DB_PATH);
-  process.stderr.write(`Backlog DB: ${DB_PATH} (registered as "${slug}")\n`);
+  logger.info("backlog:db", { db: DB_PATH, slug });
 } else {
   slug = PROJECT_ROOT.split("/").pop();
-  process.stderr.write(`Backlog remote mode: ${process.env.BACKLOG_API_URL}\n`);
+  logger.info("backlog:remote", { url: process.env.BACKLOG_API_URL });
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
@@ -84,27 +85,44 @@ function ok(payload) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }
 
+function tool(name, desc, schema, handler) {
+  server.tool(name, desc, schema, async (args) => {
+    logger.debug("tool:call", { tool: name, args });
+    try {
+      const result = await handler(args);
+      // Parse the payload back out so the log contains actual output, not the MCP wrapper
+      let output;
+      try { output = JSON.parse(result.content[0].text); } catch { output = null; }
+      logger.debug("tool:ok", { tool: name, output });
+      return result;
+    } catch (err) {
+      logger.error("tool:error", { tool: name, error: err.message });
+      throw err;
+    }
+  });
+}
+
 // ── MCP server ────────────────────────────────────────────────────────────
 
 const server = new McpServer({ name: "agent-backlog", version: "3.0.0" });
 
 // ── backlog items ─────────────────────────────────────────────────────────
 
-server.tool(
+tool(
   "backlog_list",
   "List backlog items, optionally filtered by status. Each item includes a 'version' field for optimistic locking.",
   { status: StatusEnum.optional() },
   async ({ status }) => ok(await store.listItems(status))
 );
 
-server.tool(
+tool(
   "backlog_get",
   "Get a single backlog item with its full details. The returned 'version' field must be passed to any subsequent update operation on this item.",
   { id: z.number().int() },
   async ({ id }) => ok(await store.getItem(id))
 );
 
-server.tool(
+tool(
   "backlog_create",
   "Create a new backlog item. Returns the item with version 1.",
   {
@@ -116,7 +134,7 @@ server.tool(
     ok(await store.createItem({ title, description, status }))
 );
 
-server.tool(
+tool(
   "backlog_update",
   "Update a backlog item's title, description, or status. Requires the 'version' from your last read of this item. If another agent modified the item since you read it, this will fail with a CONFLICT error — re-fetch with backlog_get and retry.",
   {
@@ -132,7 +150,7 @@ server.tool(
 
 // ── checklist ─────────────────────────────────────────────────────────────
 
-server.tool(
+tool(
   "checklist_add",
   "Add a checklist item to a backlog item. Requires the item's current 'version' for conflict detection. Use parent_id to nest under an existing checklist item.",
   {
@@ -145,7 +163,7 @@ server.tool(
     ok(await store.addChecklist(item_id, { version, label, parent_id }))
 );
 
-server.tool(
+tool(
   "checklist_update",
   "Update a checklist item's label or checked state. Requires the parent item's current 'version' for conflict detection.",
   {
@@ -159,7 +177,7 @@ server.tool(
     ok(await store.updateChecklist(item_id, { version, id, label, checked }))
 );
 
-server.tool(
+tool(
   "checklist_delete",
   "Delete a checklist item (cascades to children). Requires the parent item's current 'version' for conflict detection.",
   {
@@ -173,7 +191,7 @@ server.tool(
 
 // ── comments ──────────────────────────────────────────────────────────────
 
-server.tool(
+tool(
   "comment_add",
   "Append a comment to a backlog item. Comments are append-only and do not require version checking. Author is always 'agent' via MCP; use the UI to add human comments.",
   {
@@ -186,7 +204,7 @@ server.tool(
 
 // ── dependencies ──────────────────────────────────────────────────────────
 
-server.tool(
+tool(
   "dependency_add",
   "Add a dependency: item_id depends on depends_on_id. Requires the item's current 'version' for conflict detection.",
   {
@@ -198,7 +216,7 @@ server.tool(
     ok(await store.addDependency(item_id, { version, depends_on_id }))
 );
 
-server.tool(
+tool(
   "dependency_remove",
   "Remove a dependency between two items. Requires the item's current 'version' for conflict detection.",
   {
@@ -212,7 +230,7 @@ server.tool(
 
 // ── search ────────────────────────────────────────────────────────────────
 
-server.tool(
+tool(
   "backlog_search",
   "Search backlog items by one or more keywords. Supports quoted phrases (\"exact match\"). Items are ranked by relevance: title matches score higher than description matches. All tokens must appear somewhere in the item (AND logic). Optionally filter by status.",
   {
@@ -236,7 +254,7 @@ async function claimAndStartUI() {
   uiServer = await startUI(UI_PORT);
 
   uiServer.on("error", (err) => {
-    process.stderr.write(`UI server error: ${err.message}\n`);
+    logger.error("ui:server-error", { error: err.message });
     releaseUILeadership();
     isUILeader = false;
     uiServer = null;
@@ -244,14 +262,14 @@ async function claimAndStartUI() {
 
   uiServer.on("close", () => {
     if (isUILeader) {
-      process.stderr.write("UI server closed unexpectedly, releasing leadership\n");
+      logger.warn("ui:closed-unexpectedly");
       releaseUILeadership();
       isUILeader = false;
       uiServer = null;
     }
   });
 
-  process.stderr.write(`Backlog UI started: http://localhost:${UI_PORT}\n`);
+  logger.info("ui:started", { port: UI_PORT });
   return true;
 }
 
@@ -270,13 +288,13 @@ function healthCheckUI(port) {
 await claimAndStartUI();
 if (!isUILeader) {
   const lock = getUILeaderPort();
-  process.stderr.write(`Backlog UI already running on port ${lock ?? UI_PORT}\n`);
+  logger.info("ui:already-running", { port: lock ?? UI_PORT });
 }
 
 const leaderCheckInterval = setInterval(async () => {
   if (isUILeader) {
     if (!uiServer || !uiServer.listening) {
-      process.stderr.write("UI server no longer listening, restarting...\n");
+      logger.warn("ui:not-listening-restarting");
       releaseUILeadership();
       isUILeader = false;
       uiServer = null;
@@ -287,14 +305,14 @@ const leaderCheckInterval = setInterval(async () => {
 
   const port = getUILeaderPort();
   if (port === null) {
-    process.stderr.write("UI leader gone, attempting takeover...\n");
+    logger.info("ui:leader-gone-takeover");
     await claimAndStartUI();
     return;
   }
 
   const alive = await healthCheckUI(port);
   if (!alive) {
-    process.stderr.write("UI leader not responding, attempting takeover...\n");
+    logger.warn("ui:leader-not-responding-takeover", { port });
     await claimAndStartUI();
   }
 }, 5000);
@@ -304,6 +322,7 @@ const leaderCheckInterval = setInterval(async () => {
 function shutdown() {
   clearInterval(leaderCheckInterval);
   if (isUILeader) {
+    logger.info("ui:leadership-released");
     releaseUILeadership();
     stopUI();
   }

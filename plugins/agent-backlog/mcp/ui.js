@@ -12,6 +12,7 @@ import {
   validate,
   PatchItemBodySchema, AddChecklistBodySchema, PatchChecklistBodySchema, AddCommentSchema,
 } from "./schemas.js";
+import { logger } from "./logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban.html"), "utf8");
@@ -130,7 +131,7 @@ function broadcastProject(slug) {
   const data = allSummaries(project.stmts);
   const msg = `event: update\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) {
-    try { res.write(msg); } catch { clients.delete(res); }
+    try { res.write(msg); } catch (e) { logger.warn("ui:sse-write-error", { slug, error: e.message }); clients.delete(res); }
   }
 }
 
@@ -383,6 +384,7 @@ async function handleRequest(req, res) {
       return;
     }
     const code = e.message.includes("not found") ? 404 : 400;
+    logger.error("ui:request-error", { method: req.method, path: url.pathname, status: code, error: e.message });
     json(res, code, { error: e.message });
   }
 }
