@@ -4,7 +4,8 @@
   "type": "module",
   "bin": {
     "agent-backlog": "./server.js",
-    "agent-backlog-ui": "./ui.js"
+    "agent-backlog-ui": "./ui.js",
+    "agent-backlog-api": "./api-server.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

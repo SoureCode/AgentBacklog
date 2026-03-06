@@ -12,7 +12,69 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban.html"), "utf8");
 
-// ── project database pool ─────────────────────────────────────────────────
+// ── remote mode detection ─────────────────────────────────────────────────
+
+const REMOTE_API_URL = process.env.BACKLOG_API_URL;
+const REMOTE_API_KEY = process.env.BACKLOG_API_KEY;
+const isRemoteMode = !!(REMOTE_API_URL && REMOTE_API_KEY);
+
+// ── remote mode helpers ───────────────────────────────────────────────────
+
+async function remoteListProjects() {
+  const res = await fetch(`${REMOTE_API_URL}/api/projects`);
+  return res.json();
+}
+
+async function remoteProxyRequest(path, req, res) {
+  const url = `${REMOTE_API_URL}/api/projects${path}`;
+  const headers = { "Content-Type": "application/json" };
+  // Admin endpoints on the API server don't need auth for project listing,
+  // but per-project endpoints may need it
+  if (REMOTE_API_KEY) {
+    headers.Authorization = `Bearer ${REMOTE_API_KEY}`;
+  }
+
+  const options = { method: req.method, headers };
+
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    const body = await new Promise((resolve) => {
+      let data = "";
+      req.on("data", (chunk) => { data += chunk; });
+      req.on("end", () => resolve(data));
+    });
+    if (body) options.body = body;
+  }
+
+  const upstream = await fetch(url, options);
+  const contentType = upstream.headers.get("content-type") || "application/json";
+
+  // For SSE, pipe the upstream response
+  if (contentType.includes("text/event-stream")) {
+    res.writeHead(upstream.status, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    // Stream the response body
+    const reader = upstream.body.getReader();
+    const pump = async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) { res.end(); break; }
+        res.write(value);
+      }
+    };
+    pump().catch(() => res.end());
+    req.on("close", () => { reader.cancel(); });
+    return;
+  }
+
+  const data = await upstream.text();
+  res.writeHead(upstream.status, { "Content-Type": contentType });
+  res.end(data);
+}
+
+// ── local mode: project database pool ─────────────────────────────────────
 
 const dbPool = new Map();
 
@@ -32,7 +94,6 @@ function getProject(slug) {
 }
 
 function listProjects() {
-  // Re-read registry every time so new projects appear without restart
   const registry = loadRegistry();
   const projects = [];
   for (const [slug, project] of Object.entries(registry.projects)) {
@@ -53,7 +114,7 @@ function listProjects() {
   return projects;
 }
 
-// ── SSE clients per project ───────────────────────────────────────────────
+// ── SSE clients per project (local mode only) ─────────────────────────────
 
 const sseClients = new Map();
 
@@ -105,6 +166,29 @@ async function handleRequest(req, res) {
       res.end(KANBAN_HTML);
       return;
     }
+
+    // ── Remote mode: proxy to API server ────────────────────────────────
+
+    if (isRemoteMode) {
+      if (req.method === "GET" && url.pathname === "/api/projects") {
+        const projects = await remoteListProjects();
+        json(res, 200, projects);
+        return;
+      }
+
+      // Proxy project-scoped routes
+      const projectMatch = url.pathname.match(/^\/api\/projects\/(.+)$/);
+      if (projectMatch) {
+        const path = "/" + projectMatch[1];
+        await remoteProxyRequest("/" + projectMatch[1], req, res);
+        return;
+      }
+
+      json(res, 404, { error: "Not found" });
+      return;
+    }
+
+    // ── Local mode: direct DB access ────────────────────────────────────
 
     // List projects
     if (req.method === "GET" && url.pathname === "/api/projects") {
@@ -292,14 +376,16 @@ let pollInterval = null;
 export function startUI(port) {
   const httpServer = createServer(handleRequest);
 
-  // Poll for DB changes from MCP servers
-  pollInterval = setInterval(() => {
-    for (const slug of sseClients.keys()) {
-      if (sseClients.get(slug).size > 0) {
-        broadcastProject(slug);
+  // Poll for DB changes from MCP servers (local mode only)
+  if (!isRemoteMode) {
+    pollInterval = setInterval(() => {
+      for (const slug of sseClients.keys()) {
+        if (sseClients.get(slug).size > 0) {
+          broadcastProject(slug);
+        }
       }
-    }
-  }, 2000);
+    }, 2000);
+  }
 
   return new Promise((resolve) => {
     httpServer.listen(port, "0.0.0.0", () => {
@@ -329,6 +415,9 @@ if (isMain) {
 
   await startUI(port);
   console.log(`Backlog UI: http://localhost:${port}`);
+  if (isRemoteMode) {
+    console.log(`Remote mode: proxying to ${REMOTE_API_URL}`);
+  }
 
   function shutdown() {
     releaseUILeadership();
