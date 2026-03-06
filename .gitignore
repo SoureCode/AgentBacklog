@@ -1,0 +1,4 @@
+node_modules/
+agent-backlog.json
+*.tmp
+.claude/

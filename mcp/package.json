@@ -1,0 +1,11 @@
+{
+  "name": "agent-backlog",
+  "version": "1.0.0",
+  "type": "module",
+  "bin": {
+    "agent-backlog": "./server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
