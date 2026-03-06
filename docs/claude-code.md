@@ -51,6 +51,8 @@ Add to your project's `.claude/settings.json` so team members are prompted to in
 claude plugin update agent-backlog@sourecode-backlog
 ```
 
+After updating, **start a new Claude Code session** so the new MCP server code is loaded. The `SessionStart` hook will re-run `npm install` automatically if new dependencies were added.
+
 ### Uninstall
 
 ```bash

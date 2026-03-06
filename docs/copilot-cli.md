@@ -12,9 +12,21 @@ For Claude Code setup see [claude-code.md](claude-code.md).
 ```bash
 copilot plugin marketplace add SoureCode/AgentBacklog
 copilot plugin install agent-backlog@sourecode-backlog
+cd ~/.copilot/installed-plugins/sourecode-backlog/agent-backlog/mcp
+npm install
 ```
 
-npm dependencies (`better-sqlite3`, `@modelcontextprotocol/sdk`) are installed automatically on first session start via the `sessionStart` hook.
+---
+
+## Update
+
+```bash
+copilot plugin update agent-backlog@sourecode-backlog
+cd ~/.copilot/installed-plugins/sourecode-backlog/agent-backlog/mcp
+npm install
+```
+
+After updating, **restart your Copilot CLI session** so the new MCP server code is loaded.
 
 ---
 
