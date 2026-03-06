@@ -52,14 +52,44 @@ rm .backlog.db
 
 Team mode connects to a central API server instead of a local SQLite file. See [api-server/README.md](api-server/README.md) to set up the server and obtain an API key.
 
-Once you have a URL and key, set them as environment variables. Copilot CLI inherits environment variables from the shell it was launched in, so adding them to your shell profile is all that is needed.
+> **Note:** Copilot CLI does **not** forward the parent shell's environment variables to the MCP server subprocess. Use config files instead (described below).
 
-Add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) and restart your terminal:
+### Global config — all projects
 
-```bash
-export BACKLOG_API_URL=http://your-server:4000
-export BACKLOG_API_KEY=sk-proj-abc123
+Create `~/.config/agent-backlog/config.json`:
+
+```json
+{
+  "BACKLOG_API_URL": "http://your-server:4000",
+  "BACKLOG_API_KEY": "sk-proj-abc123"
+}
 ```
+
+### Per-repo config — one project
+
+Create `.backlog.json` in the project root for shared team config (safe to commit — keep secrets out):
+
+```json
+{
+  "BACKLOG_API_URL": "http://your-server:4000"
+}
+```
+
+Create `.backlog.local.json` for personal secrets (add to `.gitignore`):
+
+```json
+{
+  "BACKLOG_API_KEY": "sk-proj-abc123"
+}
+```
+
+Per-repo local overrides per-repo which overrides global. Shell environment variables always take highest precedence.
+
+---
+
+## Configuration reference
+
+See [configuration.md](configuration.md) for all environment variables and config file locations.
 
 ---
 

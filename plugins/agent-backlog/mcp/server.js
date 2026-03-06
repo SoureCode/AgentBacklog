@@ -1,11 +1,13 @@
 #!/usr/bin/env node
+// config.js must be the first local import: it loads config files into
+// process.env before any other module reads env vars at evaluation time.
+import { PROJECT_ROOT } from "./config.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { logger } from "./logger.js";
-import { join, dirname, resolve, isAbsolute } from "path";
+import { join } from "path";
 import { request } from "http";
-import { execSync } from "child_process";
 import { registerProject } from "./db.js";
 import {
   tryBecomeUILeader, releaseUILeadership, getUILeaderPort,
@@ -14,58 +16,7 @@ import { createStore, VersionConflictError } from "./store.js";
 import { startUI, stopUI } from "./ui.js";
 import { StatusEnum, TitleField } from "./schemas.js";
 
-// ── project root detection ────────────────────────────────────────────────
-
-function detectProjectRoot() {
-  if (process.env.BACKLOG_PROJECT_ROOT) return process.env.BACKLOG_PROJECT_ROOT;
-
-  // When launched by Copilot CLI the server's cwd is the plugin install dir.
-  // Reading the parent process cwd gives us the CLI's working directory,
-  // which is the user's actual project root.
-  if (process.platform === "linux") {
-    try {
-      const parentCwd = execSync(`readlink /proc/${process.ppid}/cwd`, {
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"],
-      }).trim();
-      if (parentCwd && parentCwd !== process.cwd()) return parentCwd;
-    } catch { /* fall through */ }
-  }
-
-  if (process.platform === "darwin") {
-    try {
-      const out = execSync(`lsof -a -p ${process.ppid} -d cwd -Fn`, {
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"],
-      }).trim();
-      const line = out.split("\n").find(l => l.startsWith("n"));
-      if (line) {
-        const parentCwd = line.slice(1);
-        if (parentCwd && parentCwd !== process.cwd()) return parentCwd;
-      }
-    } catch { /* fall through */ }
-  }
-
-  // Use --git-common-dir to resolve to the main repo root even in worktrees.
-  // Regular repo: returns ".git" (relative) → resolve + dirname = repo root
-  // Worktree: returns "/path/to/main-repo/.git" (absolute) → dirname = main repo root
-  try {
-    const gitCommonDir = execSync("git rev-parse --git-common-dir", {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-    if (isAbsolute(gitCommonDir)) {
-      return dirname(gitCommonDir);
-    }
-    // Relative path — resolve from cwd
-    return dirname(resolve(process.cwd(), gitCommonDir));
-  } catch {
-    return process.cwd();
-  }
-}
-
 const isRemoteMode = !!(process.env.BACKLOG_API_URL && process.env.BACKLOG_API_KEY);
-const PROJECT_ROOT = detectProjectRoot();
 const store = createStore({ projectRoot: PROJECT_ROOT });
 
 // Register in local registry only in local mode

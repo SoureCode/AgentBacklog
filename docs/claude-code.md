@@ -138,3 +138,29 @@ Each project on the API server has its own API key, so different repos can point
 ```
 
 Claude Code merges both files, so the MCP server receives both variables. The URL is safe to commit; the key stays out of version control. Each team member adds only their own `settings.local.json`.
+
+### Option D — Per-project backlog config files
+
+Alternatively, use backlog-native config files in the project root (these work for both Claude Code and Copilot CLI):
+
+**`.backlog.json`** (commit this — safe to share):
+
+```json
+{
+  "BACKLOG_API_URL": "http://your-server:4000"
+}
+```
+
+**`.backlog.local.json`** (do not commit — add to `.gitignore`):
+
+```json
+{
+  "BACKLOG_API_KEY": "sk-proj-abc123"
+}
+```
+
+---
+
+## Configuration reference
+
+See [configuration.md](configuration.md) for all environment variables and config file locations.
