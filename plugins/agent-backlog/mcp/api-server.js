@@ -62,13 +62,16 @@ function getStoreForSlug(slug) {
 // ── SSE clients per project ───────────────────────────────────────────────
 
 const sseClients = new Map();
+const lastBroadcast = new Map();
 
-function broadcastProject(slug) {
+function broadcastProject(slug, onlyIfChanged = false) {
   const clients = sseClients.get(slug);
   if (!clients || clients.size === 0) return;
   const store = getStoreForSlug(slug);
   const data = store.listItems();
   const msg = `event: update\ndata: ${JSON.stringify(data)}\n\n`;
+  if (onlyIfChanged && lastBroadcast.get(slug) === msg) return;
+  lastBroadcast.set(slug, msg);
   for (const res of clients) {
     if (res.writableEnded) { clients.delete(res); continue; }
     try { res.write(msg); } catch (e) { logger.warn("api:sse-write-error", { slug, error: e.message }); clients.delete(res); }
@@ -458,7 +461,7 @@ if (command === "create-project") {
   const pollInterval = setInterval(() => {
     for (const slug of sseClients.keys()) {
       if (sseClients.get(slug).size > 0) {
-        broadcastProject(slug);
+        broadcastProject(slug, true);
       }
     }
   }, 2000);
