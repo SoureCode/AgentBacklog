@@ -216,7 +216,6 @@ async function handleRequest(req, res) {
     if (req.method === "GET" && url.pathname === "/api/items") {
       const status = url.searchParams.get("status") || undefined;
       json(res, 200, store.listItems(status));
-      broadcastProject(projectSlug);
       return;
     }
 
