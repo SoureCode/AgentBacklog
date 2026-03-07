@@ -11,7 +11,7 @@
       "name": "agent-backlog",
       "source": "plugins/agent-backlog",
       "description": "Agent task backlog manager with a kanban UI. Provides MCP tools for creating, tracking, and organizing backlog items with checklists, dependencies, comments, and keyword search.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": {
         "name": "SoureCode"
       },
