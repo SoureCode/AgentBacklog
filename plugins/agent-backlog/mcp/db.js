@@ -43,15 +43,29 @@ export function unregisterProject(projectRoot) {
 
 // ── database setup ────────────────────────────────────────────────────────
 
+function tryDeleteJournalMode(db) {
+  // Merge any WAL content, then switch to DELETE journal mode so writes go
+  // directly to the .db file (git-committable). The switch silently fails
+  // if another connection holds the DB open — that's OK, we retry on close.
+  try { db.pragma("wal_checkpoint(TRUNCATE)"); } catch { /* ignore */ }
+  db.pragma("journal_mode = DELETE");
+}
+
+export function closeDatabase(db) {
+  // With no other connections, we can now flush WAL and switch to DELETE.
+  tryDeleteJournalMode(db);
+  db.close();
+}
+
 export function openDatabase(dbPath) {
   const db = new Database(dbPath);
-  // Switch from WAL to DELETE journal mode so every write flushes directly
-  // to the .db file, making it git-committable after each action.
-  // wal_checkpoint(TRUNCATE) ensures any prior WAL content is merged first.
-  db.pragma("wal_checkpoint(TRUNCATE)");
-  db.pragma("journal_mode = DELETE");
-  db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
+  // Merge any prior WAL content, then switch to DELETE journal mode so
+  // writes go directly to the .db file (git-committable after each action).
+  // journal_mode = DELETE will silently fail if another connection holds
+  // the DB open, so we verify and retry on close via closeDatabase().
+  tryDeleteJournalMode(db);
+  db.pragma("foreign_keys = ON");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS items (
@@ -268,6 +282,8 @@ export class VersionConflictError extends Error {
       `then retry your operation with the new version number.`
     );
     this.name = "VersionConflictError";
+    this.id = id;
+    this.expectedVersion = expectedVersion;
     this.currentItem = currentItem;
   }
 }

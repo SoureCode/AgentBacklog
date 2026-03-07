@@ -357,7 +357,7 @@ async function handleRequest(req, res) {
         currentVersion: e.currentItem?.version,
         yourVersion: e.message.match(/your version: (\d+)/)?.[1],
       });
-      json(res, 409, { error: e.message, current: e.currentItem, id: 0, expectedVersion: 0 });
+      json(res, 409, { error: e.message, current: e.currentItem, id: e.id, expectedVersion: e.expectedVersion });
       return;
     }
     const code = e.message.includes("not found") ? 404 : 400;
