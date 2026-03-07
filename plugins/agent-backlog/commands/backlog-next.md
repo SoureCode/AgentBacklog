@@ -7,6 +7,12 @@ allowed-tools: [mcp__agent-backlog__backlog_list, mcp__agent-backlog__backlog_ge
 
 Find the best task to work on next and optionally start it.
 
+## Critical rules
+
+- **Always re-read before updating.** Before any mutating operation (`backlog_update`), call `backlog_get` to get the latest `version`. Never reuse a stale version.
+- **Always comment your work.** When starting a task, add a comment noting what you plan to do.
+- The `.backlog.db` file is part of the repository — it should be committed alongside project changes.
+
 ## Instructions
 
 1. Call `backlog_list` to get all items

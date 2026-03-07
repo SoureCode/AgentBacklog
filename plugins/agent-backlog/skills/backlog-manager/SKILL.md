@@ -13,6 +13,13 @@ description: >
 
 Agent task backlog managed via the `agent-backlog` MCP server. Works in local mode (SQLite per project) or remote mode (central API server for team sharing). Always use the MCP tools — never read or modify the database directly.
 
+## Critical workflow rules
+
+1. **The `.backlog.db` file is part of the repository** in local mode. It is committed alongside code changes so the backlog state is versioned with the project. Always commit it when making backlog changes.
+2. **Always re-read before updating.** Before any mutating operation (`backlog_update`, `checklist_add`, etc.), call `backlog_get` first to get the latest state and `version`. Never reuse a stale version from a previous read — another agent or human may have changed the item.
+3. **Always add checklists.** Every new task must have concrete checklist items. A task without a checklist cannot be tracked or worked through incrementally. Break work into small, verifiable steps.
+4. **Always comment your work.** When starting a task, add a comment noting what you plan to do. When finishing, add a comment summarising the changes made. When blocked or making decisions, add a comment explaining your reasoning. Comments are the project's memory.
+
 ## Data model
 
 Every backlog item has:
@@ -48,6 +55,7 @@ Rules:
 | `backlog_get` | `id` | No |
 | `backlog_create` | `title`, `description`, `status` | No (new item) |
 | `backlog_update` | `id`, `version`, optional `title`/`description`/`status` | **Yes** |
+| `backlog_delete` | `id`, `version` | **Yes** |
 | `checklist_add` | `item_id`, `version`, `label`, optional `parent_id` | **Yes** |
 | `checklist_update` | `item_id`, `version`, `id`, optional `label`/`checked` | **Yes** |
 | `checklist_delete` | `item_id`, `version`, `id` | **Yes** |
@@ -177,7 +185,11 @@ If a tool returns a CONFLICT error:
 ## Important
 
 - Always use MCP tools — never read or modify the database directly
+- The `.backlog.db` file is part of the repository — commit it with your changes
+- **Always call `backlog_get` before any update** to get the latest version — never reuse stale data
 - Always pass `version` to mutating tools (except `comment_add`)
 - On CONFLICT errors: re-fetch, review, then retry
-- Never delete items — they are preserved for history
-- When closing a done task: mark `done` and add a summary comment
+- Every new task must have checklist items — tasks without checklists cannot be tracked
+- Always comment your reasoning when starting, making decisions, or completing work
+- When closing a done task: mark `done` and add a summary comment describing the changes
+- Use `backlog_delete` to remove items you no longer need — they remain accessible via search for history

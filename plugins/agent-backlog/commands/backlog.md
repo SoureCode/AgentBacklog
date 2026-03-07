@@ -10,6 +10,10 @@ Show the current state of the backlog.
 
 User arguments: $ARGUMENTS
 
+## Important
+
+- The `.backlog.db` file is part of the repository — it should be committed alongside project changes.
+
 ## Instructions
 
 If the user provided arguments, treat them as a search query:
