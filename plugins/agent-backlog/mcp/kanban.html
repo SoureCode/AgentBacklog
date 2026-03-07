@@ -949,15 +949,20 @@ function connectSSE() {
       render();
       loadProjects();
       if (openModalItemId != null) {
-        // Guard: skip auto-refresh if the user has an unsaved edit in progress
-        const modalBody = document.getElementById('modal-body');
-        const textareas = modalBody ? modalBody.querySelectorAll('textarea') : [];
-        let isDirty = false;
-        for (const ta of textareas) {
-          if (document.activeElement === ta) { isDirty = true; break; }
-          if (ta.dataset.original !== undefined && ta.value !== ta.dataset.original) { isDirty = true; break; }
+        // If the open item was deleted, close the modal
+        if (!allItems.find(i => i.id === openModalItemId)) {
+          closeModal();
+        } else {
+          // Guard: skip auto-refresh if the user has an unsaved edit in progress
+          const modalBody = document.getElementById('modal-body');
+          const textareas = modalBody ? modalBody.querySelectorAll('textarea') : [];
+          let isDirty = false;
+          for (const ta of textareas) {
+            if (document.activeElement === ta) { isDirty = true; break; }
+            if (ta.dataset.original !== undefined && ta.value !== ta.dataset.original) { isDirty = true; break; }
+          }
+          if (!isDirty) refreshModal();
         }
-        if (!isDirty) refreshModal();
       }
     }
     catch (err) { console.error('SSE parse error:', err); }
