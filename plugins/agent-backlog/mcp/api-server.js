@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createServer } from "http";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { randomBytes } from "crypto";
@@ -443,7 +443,6 @@ if (command === "create-project") {
   }
   const dbPath = join(DATA_DIR, `${slug}.backlog.db`);
   try {
-    const { unlinkSync } = await import("fs");
     unlinkSync(dbPath);
     // Also remove WAL and SHM files
     try { unlinkSync(dbPath + "-wal"); } catch { /* ignore */ }
