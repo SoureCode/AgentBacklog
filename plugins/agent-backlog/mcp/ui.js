@@ -14,6 +14,7 @@ import {
 } from "./schemas.js";
 import { logger } from "./logger.js";
 import { parseBody, parsePositiveInt, json } from "./http-helpers.js";
+import { SSEBroadcaster } from "./sse.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const KANBAN_HTML = readFileSync(join(__dirname, "kanban.html"), "utf8");
@@ -34,8 +35,6 @@ async function remoteListProjects() {
 async function remoteProxyRequest(path, req, res) {
   const url = `${REMOTE_API_URL}/api/projects${path}`;
   const headers = { "Content-Type": "application/json" };
-  // Admin endpoints on the API server don't need auth for project listing,
-  // but per-project endpoints may need it
   if (REMOTE_API_KEY) {
     headers.Authorization = `Bearer ${REMOTE_API_KEY}`;
   }
@@ -54,14 +53,12 @@ async function remoteProxyRequest(path, req, res) {
   const upstream = await fetch(url, options);
   const contentType = upstream.headers.get("content-type") || "application/json";
 
-  // For SSE, pipe the upstream response
   if (contentType.includes("text/event-stream")) {
     res.writeHead(upstream.status, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
-    // Stream the response body
     const reader = upstream.body.getReader();
     const pump = async () => {
       while (true) {
@@ -123,24 +120,124 @@ function listProjects() {
   return projects;
 }
 
-// ── SSE clients per project (local mode only) ─────────────────────────────
+// ── SSE (local mode only) ─────────────────────────────────────────────────
 
-const sseClients = new Map();
-const lastBroadcast = new Map();
+const sse = new SSEBroadcaster("ui");
 
 function broadcastProject(slug, onlyIfChanged = false) {
-  const clients = sseClients.get(slug);
-  if (!clients || clients.size === 0) return;
   const project = getProject(slug);
   if (!project) return;
-  const data = allSummaries(project.stmts);
-  const msg = `event: update\ndata: ${JSON.stringify(data)}\n\n`;
-  if (onlyIfChanged && lastBroadcast.get(slug) === msg) return;
-  lastBroadcast.set(slug, msg);
-  for (const res of clients) {
-    if (res.writableEnded) { clients.delete(res); continue; }
-    try { res.write(msg); } catch (e) { logger.warn("ui:sse-write-error", { slug, error: e.message }); clients.delete(res); }
+  sse.broadcast(slug, allSummaries(project.stmts), onlyIfChanged);
+}
+
+// ── route handlers ────────────────────────────────────────────────────────
+
+function handleItemRoutes(stmts, slug, req, path, id) {
+  if (req.method === "GET") {
+    return { status: 200, body: fullItem(stmts, id) };
   }
+
+  if (req.method === "PATCH") {
+    return async () => {
+      const body = await parseBody(req);
+      const fields = validate(PatchItemBodySchema, body);
+      const item = requireItem(stmts, id);
+      const versionHeader = req.headers["if-match"];
+      const expectedVersion = versionHeader ? parseInt(versionHeader, 10) : fields.version;
+      if (expectedVersion !== undefined && expectedVersion !== item.version) {
+        const current = fullItem(stmts, id);
+        return { status: 409, body: { error: "Version conflict", current }, headers: { ETag: String(item.version) } };
+      }
+      const result = stmts.updateItem.run(
+        fields.title ?? item.title,
+        fields.description ?? item.description,
+        fields.status ?? item.status,
+        now(), id, item.version
+      );
+      if (result.changes === 0) {
+        const current = fullItem(stmts, id);
+        return { status: 409, body: { error: "Version conflict", current }, headers: { ETag: String(current.version) } };
+      }
+      const updated = fullItem(stmts, id);
+      broadcastProject(slug);
+      return { status: 200, body: updated, headers: { ETag: String(updated.version) } };
+    };
+  }
+
+  if (req.method === "DELETE") {
+    const item = requireItem(stmts, id);
+    stmts.updateItem.run(item.title, item.description, "archived", now(), id, item.version);
+    broadcastProject(slug);
+    return { status: 200, body: { archived: id } };
+  }
+
+  return null;
+}
+
+function handleChecklistRoutes(stmts, slug, req, itemId, cid) {
+  if (req.method === "POST" && cid === null) {
+    return async () => {
+      const body = await parseBody(req);
+      const { label, parent_id } = validate(AddChecklistBodySchema, body);
+      const item = requireItem(stmts, itemId);
+      if (parent_id != null) {
+        const parent = stmts.getChecklistItem.get(parent_id, itemId);
+        if (!parent) return { status: 404, body: { error: "parent not found" } };
+      }
+      const position = parent_id != null
+        ? stmts.countChecklistByParent.get(itemId, parent_id).cnt
+        : stmts.countTopChecklist.get(itemId).cnt;
+      const result = stmts.addChecklist.run(itemId, parent_id ?? null, label.trim(), position);
+      bumpVersion(stmts, itemId, item.version);
+      broadcastProject(slug);
+      return { status: 201, body: { id: Number(result.lastInsertRowid), label: label.trim(), checked: false, position, children: [] } };
+    };
+  }
+
+  if (req.method === "PATCH" && cid !== null) {
+    return async () => {
+      const body = await parseBody(req);
+      const fields = validate(PatchChecklistBodySchema, body);
+      const item = requireItem(stmts, itemId);
+      const entry = stmts.getChecklistItem.get(cid, itemId);
+      if (!entry) return { status: 404, body: { error: "checklist item not found" } };
+      stmts.updateChecklist.run(
+        fields.label ?? entry.label,
+        fields.checked !== undefined ? (fields.checked ? 1 : 0) : entry.checked,
+        cid
+      );
+      bumpVersion(stmts, itemId, item.version);
+      const updated = stmts.getChecklistItem.get(cid, itemId);
+      broadcastProject(slug);
+      return { status: 200, body: { ...updated, checked: !!updated.checked } };
+    };
+  }
+
+  if (req.method === "DELETE" && cid !== null) {
+    const item = requireItem(stmts, itemId);
+    const entry = stmts.getChecklistItem.get(cid, itemId);
+    if (!entry) return { status: 404, body: { error: "checklist item not found" } };
+    deleteChecklistRecursive(stmts, cid);
+    bumpVersion(stmts, itemId, item.version);
+    broadcastProject(slug);
+    return { status: 200, body: { deleted: cid } };
+  }
+
+  return null;
+}
+
+function handleCommentRoutes(stmts, slug, req, itemId) {
+  if (req.method !== "POST") return null;
+  return async () => {
+    const body = await parseBody(req);
+    const { body: commentBody } = validate(AddCommentSchema, body);
+    const item = requireItem(stmts, itemId);
+    const ts = now();
+    const result = stmts.addComment.run(itemId, "human", commentBody.trim(), ts);
+    bumpVersion(stmts, itemId, item.version);
+    broadcastProject(slug);
+    return { status: 201, body: { id: Number(result.lastInsertRowid), author: "human", body: commentBody.trim(), created_at: ts } };
+  };
 }
 
 // ── HTTP request handler ──────────────────────────────────────────────────
@@ -171,7 +268,6 @@ async function handleRequest(req, res) {
         return;
       }
 
-      // Proxy project-scoped routes
       const projectMatch = url.pathname.match(/^\/api\/projects\/(.+)$/);
       if (projectMatch) {
         await remoteProxyRequest("/" + projectMatch[1], req, res);
@@ -184,13 +280,11 @@ async function handleRequest(req, res) {
 
     // ── Local mode: direct DB access ────────────────────────────────────
 
-    // List projects
     if (req.method === "GET" && url.pathname === "/api/projects") {
       json(res, 200, listProjects());
       return;
     }
 
-    // Project-scoped API routes: /api/projects/:slug/...
     const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/(.+)$/);
     if (!projectMatch) {
       json(res, 404, { error: "Not found" });
@@ -210,15 +304,8 @@ async function handleRequest(req, res) {
 
     // SSE
     if (req.method === "GET" && path === "/events") {
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
-      res.write(`event: update\ndata: ${JSON.stringify(allSummaries(stmts))}\n\n`);
-      if (!sseClients.has(slug)) sseClients.set(slug, new Set());
-      sseClients.get(slug).add(res);
-      req.on("close", () => { sseClients.get(slug)?.delete(res); });
+      const cleanup = sse.register(slug, res, allSummaries(stmts));
+      req.on("close", cleanup);
       return;
     }
 
@@ -232,49 +319,15 @@ async function handleRequest(req, res) {
     const itemMatch = path.match(/^\/items\/(\d+)$/);
     if (itemMatch) {
       const id = parsePositiveInt(itemMatch[1]);
-
-      if (req.method === "GET") {
-        json(res, 200, fullItem(stmts, id));
-        return;
-      }
-
-      if (req.method === "PATCH") {
-        const body = await parseBody(req);
-        const fields = validate(PatchItemBodySchema, body);
-        const item = requireItem(stmts, id);
-        const versionHeader = req.headers["if-match"];
-        const expectedVersion = versionHeader ? parseInt(versionHeader, 10) : fields.version;
-        if (expectedVersion !== undefined && expectedVersion !== item.version) {
-          res.writeHead(409, { "Content-Type": "application/json", ETag: String(item.version) });
-          res.end(JSON.stringify({ error: "Version conflict", current: fullItem(stmts, id) }));
-          return;
+      const result = handleItemRoutes(stmts, slug, req, path, id);
+      if (result) {
+        const resolved = typeof result === "function" ? await result() : result;
+        if (resolved.headers) {
+          res.writeHead(resolved.status, { "Content-Type": "application/json", ...resolved.headers });
+          res.end(JSON.stringify(resolved.body));
+        } else {
+          json(res, resolved.status, resolved.body);
         }
-        const result = stmts.updateItem.run(
-          fields.title ?? item.title,
-          fields.description ?? item.description,
-          fields.status ?? item.status,
-          now(),
-          id,
-          item.version
-        );
-        if (result.changes === 0) {
-          const current = fullItem(stmts, id);
-          res.writeHead(409, { "Content-Type": "application/json", ETag: String(current.version) });
-          res.end(JSON.stringify({ error: "Version conflict", current }));
-          return;
-        }
-        const updated = fullItem(stmts, id);
-        broadcastProject(slug);
-        res.writeHead(200, { "Content-Type": "application/json", ETag: String(updated.version) });
-        res.end(JSON.stringify(updated));
-        return;
-      }
-
-      if (req.method === "DELETE") {
-        const item = requireItem(stmts, id);
-        stmts.updateItem.run(item.title, item.description, "archived", now(), id, item.version);
-        broadcastProject(slug);
-        json(res, 200, { archived: id });
         return;
       }
     }
@@ -284,68 +337,24 @@ async function handleRequest(req, res) {
     if (clMatch) {
       const itemId = parsePositiveInt(clMatch[1], "item_id");
       const cid = clMatch[2] ? parsePositiveInt(clMatch[2], "cid") : null;
-
-      if (req.method === "POST" && cid === null) {
-        const body = await parseBody(req);
-        const { label, parent_id } = validate(AddChecklistBodySchema, body);
-        const item = requireItem(stmts, itemId);
-        if (parent_id != null) {
-          const parent = stmts.getChecklistItem.get(parent_id, itemId);
-          if (!parent) { json(res, 404, { error: "parent not found" }); return; }
-        }
-        const position = parent_id != null
-          ? stmts.countChecklistByParent.get(itemId, parent_id).cnt
-          : stmts.countTopChecklist.get(itemId).cnt;
-        const result = stmts.addChecklist.run(itemId, parent_id ?? null, label.trim(), position);
-        bumpVersion(stmts, itemId, item.version);
-        broadcastProject(slug);
-        json(res, 201, { id: Number(result.lastInsertRowid), label: label.trim(), checked: false, position, children: [] });
-        return;
-      }
-
-      if (req.method === "PATCH" && cid !== null) {
-        const body = await parseBody(req);
-        const fields = validate(PatchChecklistBodySchema, body);
-        const item = requireItem(stmts, itemId);
-        const entry = stmts.getChecklistItem.get(cid, itemId);
-        if (!entry) { json(res, 404, { error: "checklist item not found" }); return; }
-        stmts.updateChecklist.run(
-          fields.label ?? entry.label,
-          fields.checked !== undefined ? (fields.checked ? 1 : 0) : entry.checked,
-          cid
-        );
-        bumpVersion(stmts, itemId, item.version);
-        const updated = stmts.getChecklistItem.get(cid, itemId);
-        broadcastProject(slug);
-        json(res, 200, { ...updated, checked: !!updated.checked });
-        return;
-      }
-
-      if (req.method === "DELETE" && cid !== null) {
-        const item = requireItem(stmts, itemId);
-        const entry = stmts.getChecklistItem.get(cid, itemId);
-        if (!entry) { json(res, 404, { error: "checklist item not found" }); return; }
-        deleteChecklistRecursive(stmts, cid);
-        bumpVersion(stmts, itemId, item.version);
-        broadcastProject(slug);
-        json(res, 200, { deleted: cid });
+      const result = handleChecklistRoutes(stmts, slug, req, itemId, cid);
+      if (result) {
+        const resolved = typeof result === "function" ? await result() : result;
+        json(res, resolved.status, resolved.body);
         return;
       }
     }
 
     // Add human comment
     const commentMatch = path.match(/^\/items\/(\d+)\/comments$/);
-    if (commentMatch && req.method === "POST") {
+    if (commentMatch) {
       const id = parsePositiveInt(commentMatch[1], "item_id");
-      const body = await parseBody(req);
-      const { body: commentBody } = validate(AddCommentSchema, body);
-      const item = requireItem(stmts, id);
-      const ts = now();
-      const result = stmts.addComment.run(id, "human", commentBody.trim(), ts);
-      bumpVersion(stmts, id, item.version);
-      broadcastProject(slug);
-      json(res, 201, { id: Number(result.lastInsertRowid), author: "human", body: commentBody.trim(), created_at: ts });
-      return;
+      const result = handleCommentRoutes(stmts, slug, req, id);
+      if (result) {
+        const resolved = typeof result === "function" ? await result() : result;
+        json(res, resolved.status, resolved.body);
+        return;
+      }
     }
 
     json(res, 404, { error: "Not found" });
@@ -368,11 +377,10 @@ let httpServer = null;
 export function startUI(port) {
   httpServer = createServer(handleRequest);
 
-  // Poll for DB changes from MCP servers (local mode only)
   if (!isRemoteMode) {
     pollInterval = setInterval(() => {
-      for (const slug of sseClients.keys()) {
-        if (sseClients.get(slug).size > 0) {
+      for (const slug of sse.activeSlugs()) {
+        if (sse.clientCount(slug) > 0) {
           broadcastProject(slug, true);
         }
       }
@@ -388,13 +396,7 @@ export function startUI(port) {
 
 export function stopUI() {
   if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-  // Close all active SSE connections so httpServer.close() can finish
-  for (const [, clients] of sseClients) {
-    for (const res of clients) {
-      try { res.end(); } catch { /* ignore */ }
-    }
-  }
-  sseClients.clear();
+  sse.closeAll();
   for (const { db } of dbPool.values()) {
     try { closeDatabase(db); } catch { /* ignore */ }
   }
@@ -425,7 +427,6 @@ if (isMain) {
   function shutdown() {
     releaseUILeadership();
     stopUI();
-    // stopUI() called httpServer.close() — give it a moment then exit
     setTimeout(() => process.exit(0), 1000).unref();
     process.exitCode = 0;
   }

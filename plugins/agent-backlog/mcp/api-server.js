@@ -7,9 +7,6 @@ import { randomBytes } from "crypto";
 import { LocalStore } from "./store-local.js";
 import { VersionConflictError } from "./db.js";
 import {
-  now, requireItem, fullItem, allSummaries, deleteChecklistRecursive,
-} from "./db.js";
-import {
   validate,
   CreateItemSchema, UpdateItemSchema,
   AddChecklistSchema, UpdateChecklistSchema, DeleteChecklistSchema,
@@ -18,6 +15,7 @@ import {
 } from "./schemas.js";
 import { logger } from "./logger.js";
 import { parseBody, parsePositiveInt, json } from "./http-helpers.js";
+import { SSEBroadcaster } from "./sse.js";
 
 // ── config ────────────────────────────────────────────────────────────────
 
@@ -60,23 +58,13 @@ function getStoreForSlug(slug) {
   return store;
 }
 
-// ── SSE clients per project ───────────────────────────────────────────────
+// ── SSE broadcasting ──────────────────────────────────────────────────────
 
-const sseClients = new Map();
-const lastBroadcast = new Map();
+const sse = new SSEBroadcaster("api");
 
 function broadcastProject(slug, onlyIfChanged = false) {
-  const clients = sseClients.get(slug);
-  if (!clients || clients.size === 0) return;
   const store = getStoreForSlug(slug);
-  const data = store.listItems();
-  const msg = `event: update\ndata: ${JSON.stringify(data)}\n\n`;
-  if (onlyIfChanged && lastBroadcast.get(slug) === msg) return;
-  lastBroadcast.set(slug, msg);
-  for (const res of clients) {
-    if (res.writableEnded) { clients.delete(res); continue; }
-    try { res.write(msg); } catch (e) { logger.warn("api:sse-write-error", { slug, error: e.message }); clients.delete(res); }
-  }
+  sse.broadcast(slug, store.listItems(), onlyIfChanged);
 }
 
 // ── auth middleware ───────────────────────────────────────────────────────
@@ -148,15 +136,8 @@ async function handleRequest(req, res) {
 
       // SSE for project
       if (req.method === "GET" && path === "/events") {
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        });
-        res.write(`event: update\ndata: ${JSON.stringify(store.listItems())}\n\n`);
-        if (!sseClients.has(projectSlug)) sseClients.set(projectSlug, new Set());
-        sseClients.get(projectSlug).add(res);
-        req.on("close", () => { sseClients.get(projectSlug)?.delete(res); });
+        const cleanup = sse.register(projectSlug, res, store.listItems());
+        req.on("close", cleanup);
         return;
       }
 
@@ -304,15 +285,8 @@ async function handleRequest(req, res) {
 
     // SSE for authenticated project
     if (req.method === "GET" && url.pathname === "/api/events") {
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
-      res.write(`event: update\ndata: ${JSON.stringify(store.listItems())}\n\n`);
-      if (!sseClients.has(projectSlug)) sseClients.set(projectSlug, new Set());
-      sseClients.get(projectSlug).add(res);
-      req.on("close", () => { sseClients.get(projectSlug)?.delete(res); });
+      const cleanup = sse.register(projectSlug, res, store.listItems());
+      req.on("close", cleanup);
       return;
     }
 
@@ -425,8 +399,8 @@ if (command === "create-project") {
 
   // Poll for SSE broadcasts
   const pollInterval = setInterval(() => {
-    for (const slug of sseClients.keys()) {
-      if (sseClients.get(slug).size > 0) {
+    for (const slug of sse.activeSlugs()) {
+      if (sse.clientCount(slug) > 0) {
         broadcastProject(slug, true);
       }
     }
@@ -441,13 +415,7 @@ if (command === "create-project") {
   function shutdown() {
     clearInterval(pollInterval);
     logger.info("api:shutdown", { port });
-    // Close all active SSE connections so httpServer.close() can finish
-    for (const [, clients] of sseClients) {
-      for (const res of clients) {
-        try { res.end(); } catch { /* ignore */ }
-      }
-    }
-    sseClients.clear();
+    sse.closeAll();
     for (const [, store] of storePool) {
       try { store.close(); } catch { /* ignore */ }
     }
