@@ -189,14 +189,14 @@ tool(
     status: AgentStatusEnum.optional(),
   },
   async ({ query, status }) =>
-    ok(await store.searchItems(query, status, { includeArchived: false }))
+    ok(await store.searchItems(query, status))
 );
 
-// ── soft-delete ──────────────────────────────────────────────────────────
+// ── delete ────────────────────────────────────────────────────────────────
 
 tool(
   "backlog_delete",
-  "Soft-delete a backlog item by setting its status to 'archived'. The item remains in the database and is visible in the kanban UI, but is hidden from backlog_list and backlog_search. Requires the item's current 'version' for conflict detection.",
+  "Delete a backlog item. The item will no longer appear in backlog_list but can still be found via backlog_search and backlog_get for historical reference. Requires the item's current 'version' for conflict detection.",
   {
     id: z.number().int(),
     version: z.number().int().describe("The version number from your last backlog_get. Required for conflict detection."),
