@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd ${CLAUDE_PLUGIN_ROOT}/mcp && [ -d node_modules ] || npm install --no-audit --no-fund"
+            "command": "cd ${CLAUDE_PLUGIN_ROOT}/mcp && npm install --no-audit --no-fund"
           }
         ]
       }
