@@ -33,6 +33,19 @@ function slugForProject(registry, projectRoot) {
   return `${base}-${hash}`;
 }
 
+export function resolveProjectDb(projectRoot) {
+  mkdirSync(REGISTRY_DIR, { recursive: true });
+  const registry = loadRegistry();
+  // Reuse existing slug/path if already registered
+  for (const [slug, entry] of Object.entries(registry.projects)) {
+    if (entry.root === projectRoot) {
+      return { slug, dbPath: entry.db };
+    }
+  }
+  const slug = slugForProject(registry, projectRoot);
+  return { slug, dbPath: join(REGISTRY_DIR, `${slug}.db`) };
+}
+
 export function registerProject(projectRoot, dbPath) {
   const registry = loadRegistry();
   // Check if this root is already registered under any slug

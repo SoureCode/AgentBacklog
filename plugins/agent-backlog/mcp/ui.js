@@ -374,7 +374,7 @@ async function handleRequest(req, res) {
 let pollInterval = null;
 let httpServer = null;
 
-export function startUI(port) {
+export function startUI(port, host = process.env.BACKLOG_UI_HOST ?? "0.0.0.0") {
   httpServer = createServer(handleRequest);
 
   if (!isRemoteMode) {
@@ -388,7 +388,7 @@ export function startUI(port) {
   }
 
   return new Promise((resolve) => {
-    httpServer.listen(port, "0.0.0.0", () => {
+    httpServer.listen(port, host, () => {
       resolve(httpServer);
     });
   });
@@ -412,14 +412,15 @@ export function stopUI() {
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
   const port = parseInt(process.env.BACKLOG_UI_PORT ?? "3456", 10);
+  const host = process.env.BACKLOG_UI_HOST ?? "0.0.0.0";
   const { isLeader } = tryBecomeUILeader(port);
   if (!isLeader) {
     console.log(`UI already running (see lock file). Use a different port or stop the other instance.`);
     process.exit(1);
   }
 
-  await startUI(port);
-  console.log(`Backlog UI: http://localhost:${port}`);
+  await startUI(port, host);
+  console.log(`Backlog UI: http://${host === "0.0.0.0" ? "localhost" : host}:${port}`);
   if (isRemoteMode) {
     console.log(`Remote mode: proxying to ${REMOTE_API_URL}`);
   }

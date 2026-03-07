@@ -1,3 +1,6 @@
 node_modules/
 *.tmp
 .claude/
+.backlog.db
+.backlog.db-shm
+.backlog.db-wal

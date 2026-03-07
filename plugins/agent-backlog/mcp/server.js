@@ -6,9 +6,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { logger } from "./logger.js";
-import { join } from "path";
 import { request } from "http";
-import { registerProject } from "./db.js";
+import { registerProject, resolveProjectDb } from "./db.js";
 import {
   tryBecomeUILeader, releaseUILeadership, getUILeaderPort,
 } from "./db.js";
@@ -20,13 +19,12 @@ const isRemoteMode = !!(process.env.BACKLOG_API_URL && process.env.BACKLOG_API_K
 const store = createStore({ projectRoot: PROJECT_ROOT });
 
 // Register in local registry only in local mode
-let slug;
 if (!isRemoteMode) {
-  const DB_PATH = process.env.BACKLOG_FILE ?? join(PROJECT_ROOT, ".backlog.db");
-  slug = registerProject(PROJECT_ROOT, DB_PATH);
+  const { slug, dbPath } = resolveProjectDb(PROJECT_ROOT);
+  const DB_PATH = process.env.BACKLOG_FILE ?? dbPath;
+  registerProject(PROJECT_ROOT, DB_PATH);
   logger.info("backlog:db", { db: DB_PATH, slug });
 } else {
-  slug = PROJECT_ROOT.split("/").pop();
   logger.info("backlog:remote", { url: process.env.BACKLOG_API_URL });
 }
 

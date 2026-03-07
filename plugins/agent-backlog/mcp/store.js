@@ -1,6 +1,6 @@
-import { join } from "path";
 import { LocalStore } from "./store-local.js";
 import { RemoteStore } from "./store-remote.js";
+import { resolveProjectDb } from "./db.js";
 
 export { VersionConflictError } from "./db.js";
 
@@ -10,6 +10,6 @@ export function createStore({ projectRoot } = {}) {
   if (apiUrl && apiKey) {
     return new RemoteStore(apiUrl, apiKey);
   }
-  const dbPath = process.env.BACKLOG_FILE ?? join(projectRoot, ".backlog.db");
+  const dbPath = process.env.BACKLOG_FILE ?? resolveProjectDb(projectRoot).dbPath;
   return new LocalStore(dbPath);
 }
