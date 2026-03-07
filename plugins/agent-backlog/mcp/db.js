@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, openSync, closeSync, constants as fsConstants } from "fs";
 import { join, dirname, basename } from "path";
 import { homedir } from "os";
 
@@ -335,13 +335,40 @@ function removeLock() {
 }
 
 export function tryBecomeUILeader(port) {
+  mkdirSync(REGISTRY_DIR, { recursive: true });
+  const data = JSON.stringify({ pid: process.pid, port, started: now() }) + "\n";
+
+  // Attempt atomic creation with O_EXCL — fails if file already exists
+  try {
+    const fd = openSync(LOCK_PATH, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL);
+    writeFileSync(fd, data, "utf8");
+    closeSync(fd);
+    return { isLeader: true, port };
+  } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+  }
+
+  // Lock file exists — check if the holder is still alive
   const lock = readLock();
   if (lock && isProcessAlive(lock.pid)) {
     return { isLeader: false, port: lock.port };
   }
-  // Stale lock or no lock — claim it
-  writeLock(process.pid, port);
-  return { isLeader: true, port };
+
+  // Stale lock — remove and retry atomically
+  try { unlinkSync(LOCK_PATH); } catch { /* ignore */ }
+  try {
+    const fd = openSync(LOCK_PATH, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL);
+    writeFileSync(fd, data, "utf8");
+    closeSync(fd);
+    return { isLeader: true, port };
+  } catch (e) {
+    if (e.code === "EEXIST") {
+      // Another process claimed it between our unlink and open
+      const newLock = readLock();
+      return { isLeader: false, port: newLock?.port ?? port };
+    }
+    throw e;
+  }
 }
 
 export function releaseUILeadership() {
