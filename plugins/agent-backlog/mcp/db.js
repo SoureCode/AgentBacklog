@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, openSync, closeSync, constants as fsConstants } from "fs";
 import { join, dirname, basename } from "path";
 import { homedir } from "os";
+import { createHash } from "crypto";
 
 // ── project registry ──────────────────────────────────────────────────────
 
@@ -22,9 +23,28 @@ export function saveRegistry(registry) {
   writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2) + "\n", "utf8");
 }
 
+function slugForProject(registry, projectRoot) {
+  const base = basename(projectRoot);
+  // If slug is unused or already points to this root, use it as-is
+  const existing = registry.projects[base];
+  if (!existing || existing.root === projectRoot) return base;
+  // Collision: append a short hash of the full path
+  const hash = createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
+  return `${base}-${hash}`;
+}
+
 export function registerProject(projectRoot, dbPath) {
   const registry = loadRegistry();
-  const slug = basename(projectRoot);
+  // Check if this root is already registered under any slug
+  for (const [slug, entry] of Object.entries(registry.projects)) {
+    if (entry.root === projectRoot) {
+      entry.db = dbPath;
+      entry.lastSeen = new Date().toISOString();
+      saveRegistry(registry);
+      return slug;
+    }
+  }
+  const slug = slugForProject(registry, projectRoot);
   registry.projects[slug] = {
     root: projectRoot,
     db: dbPath,
@@ -36,9 +56,13 @@ export function registerProject(projectRoot, dbPath) {
 
 export function unregisterProject(projectRoot) {
   const registry = loadRegistry();
-  const slug = basename(projectRoot);
-  delete registry.projects[slug];
-  saveRegistry(registry);
+  for (const [slug, entry] of Object.entries(registry.projects)) {
+    if (entry.root === projectRoot) {
+      delete registry.projects[slug];
+      saveRegistry(registry);
+      return;
+    }
+  }
 }
 
 // ── database setup ────────────────────────────────────────────────────────
