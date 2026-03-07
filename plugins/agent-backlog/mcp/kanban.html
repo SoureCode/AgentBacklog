@@ -338,7 +338,7 @@ header h1 { font-size: 18px; font-weight: 600; }
     </div>
     <div class="modal-body" id="modal-body"></div>
     <div class="modal-footer" id="modal-footer">
-      <button class="btn btn-sm" id="modal-delete-btn" style="background:var(--red);color:#fff;">Archive Item</button>
+      <button class="btn btn-sm" id="modal-delete-btn" style="background:var(--red);color:#fff;">Delete Item</button>
     </div>
   </div>
 </div>
@@ -348,7 +348,6 @@ const COLUMNS = [
   { status: 'open', label: 'Open' },
   { status: 'in_progress', label: 'In Progress' },
   { status: 'done', label: 'Done' },
-  { status: 'archived', label: 'Archived' },
 ];
 
 let allItems = [];
@@ -925,7 +924,7 @@ function closeModal(pushHistory = true) {
 document.getElementById('modal-close-btn').addEventListener('click', closeModal);
 document.getElementById('modal-delete-btn').addEventListener('click', async () => {
   if (!openModalItemId) return;
-  if (!confirm('Archive this backlog item? It will be moved to the Archived column.')) return;
+  if (!confirm('Permanently delete this item? This cannot be undone.')) return;
   await apiDelete(apiBase() + '/items/' + openModalItemId);
   closeModal();
 });

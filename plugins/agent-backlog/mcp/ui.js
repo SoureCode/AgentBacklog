@@ -165,10 +165,10 @@ function handleItemRoutes(stmts, slug, req, path, id) {
   }
 
   if (req.method === "DELETE") {
-    const item = requireItem(stmts, id);
-    stmts.updateItem.run(item.title, item.description, "archived", now(), id, item.version);
+    requireItem(stmts, id);
+    stmts.deleteItem.run(id);
     broadcastProject(slug);
-    return { status: 200, body: { archived: id } };
+    return { status: 200, body: { deleted: id } };
   }
 
   return null;

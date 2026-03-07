@@ -193,7 +193,7 @@ tool(
     ok(await store.searchItems(query, status))
 );
 
-// ── delete ────────────────────────────────────────────────────────────────
+// ── delete (soft: sets status=archived, hidden from agent but recoverable) ─
 
 tool(
   "backlog_delete",
