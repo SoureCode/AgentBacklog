@@ -82,11 +82,21 @@ AgentBacklog/
             └── package.json
 ```
 
-## development
+## Development
+
+### Claude Code
+
+Run with the local plugin (no install needed):
+
+```bash
+claude --plugin-dir ./plugins/agent-backlog/
+```
+
+### GitHub Copilot CLI
 
 Switch to the local plugin:
 
-```
+```bash
 copilot plugin uninstall agent-backlog@sourecode-backlog
 copilot plugin install ./plugins/agent-backlog/
 pushd ~/.copilot/installed-plugins/_direct/agent-backlog/mcp && npm install && popd
@@ -94,7 +104,7 @@ pushd ~/.copilot/installed-plugins/_direct/agent-backlog/mcp && npm install && p
 
 Update plugin:
 
-```
+```bash
 copilot plugin uninstall agent-backlog
 copilot plugin install ./plugins/agent-backlog/
 pushd ~/.copilot/installed-plugins/_direct/agent-backlog/mcp && npm install && popd
