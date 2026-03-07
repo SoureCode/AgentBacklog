@@ -7,7 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { logger } from "./logger.js";
 import { request } from "http";
-import { registerProject, resolveProjectDb } from "./db.js";
+import { registerProject, resolveProjectDb, migrateAllProjects } from "./db.js";
 import {
   tryBecomeUILeader, releaseUILeadership, getUILeaderPort,
 } from "./db.js";
@@ -17,6 +17,9 @@ import { AgentStatusEnum, TitleField } from "./schemas.js";
 
 const isRemoteMode = !!(process.env.BACKLOG_API_URL && process.env.BACKLOG_API_KEY);
 const store = createStore({ projectRoot: PROJECT_ROOT });
+
+// Migrate existing project DBs to ~/.config/agent-backlog/data/ if needed
+migrateAllProjects();
 
 // Register in local registry only in local mode
 if (!isRemoteMode) {

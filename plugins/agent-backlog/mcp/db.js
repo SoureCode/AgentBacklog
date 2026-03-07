@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, openSync, closeSync, constants as fsConstants } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, copyFileSync, openSync, closeSync, constants as fsConstants } from "fs";
 import { join, dirname, basename } from "path";
 import { homedir } from "os";
 import { createHash } from "crypto";
@@ -7,6 +7,7 @@ import { createHash } from "crypto";
 // ── project registry ──────────────────────────────────────────────────────
 
 const REGISTRY_DIR = join(homedir(), ".config", "agent-backlog");
+const DATA_DIR = join(REGISTRY_DIR, "data");
 const REGISTRY_PATH = join(REGISTRY_DIR, "projects.json");
 
 export function loadRegistry() {
@@ -34,7 +35,7 @@ function slugForProject(registry, projectRoot) {
 }
 
 export function resolveProjectDb(projectRoot) {
-  mkdirSync(REGISTRY_DIR, { recursive: true });
+  mkdirSync(DATA_DIR, { recursive: true });
   const registry = loadRegistry();
   // Reuse existing slug/path if already registered
   for (const [slug, entry] of Object.entries(registry.projects)) {
@@ -43,7 +44,29 @@ export function resolveProjectDb(projectRoot) {
     }
   }
   const slug = slugForProject(registry, projectRoot);
-  return { slug, dbPath: join(REGISTRY_DIR, `${slug}.db`) };
+  return { slug, dbPath: join(DATA_DIR, `${slug}.db`) };
+}
+
+export function migrateAllProjects() {
+  mkdirSync(DATA_DIR, { recursive: true });
+  const registry = loadRegistry();
+  let changed = false;
+
+  for (const [slug, entry] of Object.entries(registry.projects)) {
+    const newPath = join(DATA_DIR, `${slug}.db`);
+    if (entry.db === newPath) continue; // already in the right place
+
+    if (existsSync(entry.db)) {
+      // Move the file to the new location (copy + delete original)
+      copyFileSync(entry.db, newPath);
+      unlinkSync(entry.db);
+    }
+
+    entry.db = newPath;
+    changed = true;
+  }
+
+  if (changed) saveRegistry(registry);
 }
 
 export function registerProject(projectRoot, dbPath) {
