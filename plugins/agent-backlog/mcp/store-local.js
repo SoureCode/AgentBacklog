@@ -1,6 +1,6 @@
 import {
   openDatabase, closeDatabase, prepareStatements,
-  now, requireItem, fullItem, allSummaries, deleteChecklistRecursive, wouldCycle,
+  now, requireItem, fullItem, allSummaries, summarize, deleteChecklistRecursive, wouldCycle,
   VersionConflictError, requireVersion, bumpVersion,
 } from "./db.js";
 
@@ -73,7 +73,7 @@ export class LocalStore {
     }
 
     scored.sort((a, b) => b.score - a.score);
-    return scored.map((s) => ({ ...s.item, version: s.item.version }));
+    return scored.map((s) => summarize(this.stmts, s.item));
   }
 
   addChecklist(item_id, { version, label, parent_id }) {
