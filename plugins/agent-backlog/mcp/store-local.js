@@ -1,5 +1,5 @@
 import {
-  openDatabase, prepareStatements,
+  openDatabase, closeDatabase, prepareStatements,
   now, requireItem, fullItem, allSummaries, deleteChecklistRecursive, wouldCycle,
   VersionConflictError, requireVersion, bumpVersion,
 } from "./db.js";
@@ -11,7 +11,7 @@ export class LocalStore {
   }
 
   close() {
-    this.db.close();
+    closeDatabase(this.db);
   }
 
   listItems(status) {
@@ -127,7 +127,7 @@ export class LocalStore {
     const item = requireItem(this.stmts, item_id);
     const ts = now();
     const result = this.stmts.addComment.run(item_id, "agent", body, ts);
-    this.stmts.touchItem.run(ts, item_id, item.version);
+    bumpVersion(this.stmts, item_id, item.version);
     return { id: Number(result.lastInsertRowid), author: "agent", body, created_at: ts };
   }
 
