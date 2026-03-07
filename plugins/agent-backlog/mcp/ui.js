@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import {
-  openDatabase, prepareStatements, loadRegistry,
+  openDatabase, closeDatabase, prepareStatements, loadRegistry,
   now, requireItem, fullItem, allSummaries, deleteChecklistRecursive,
   VersionConflictError, tryBecomeUILeader, releaseUILeadership,
 } from "./db.js";
@@ -205,7 +205,6 @@ async function handleRequest(req, res) {
       // Proxy project-scoped routes
       const projectMatch = url.pathname.match(/^\/api\/projects\/(.+)$/);
       if (projectMatch) {
-        const path = "/" + projectMatch[1];
         await remoteProxyRequest("/" + projectMatch[1], req, res);
         return;
       }
@@ -428,7 +427,7 @@ export function stopUI() {
   }
   sseClients.clear();
   for (const { db } of dbPool.values()) {
-    try { db.close(); } catch { /* ignore */ }
+    try { closeDatabase(db); } catch { /* ignore */ }
   }
   dbPool.clear();
   if (httpServer) {
