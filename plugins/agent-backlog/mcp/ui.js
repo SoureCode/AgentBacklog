@@ -5,7 +5,7 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import {
   openDatabase, closeDatabase, prepareStatements, loadRegistry,
-  now, requireItem, fullItem, allSummaries, deleteChecklistRecursive,
+  now, requireItem, fullItem, allSummaries, deleteChecklistRecursive, bumpVersion,
   VersionConflictError, tryBecomeUILeader, releaseUILeadership,
 } from "./db.js";
 import {
@@ -296,7 +296,7 @@ async function handleRequest(req, res) {
           ? stmts.countChecklistByParent.get(itemId, parent_id).cnt
           : stmts.countTopChecklist.get(itemId).cnt;
         const result = stmts.addChecklist.run(itemId, parent_id ?? null, label.trim(), position);
-        stmts.touchItem.run(now(), itemId, item.version);
+        bumpVersion(stmts, itemId, item.version);
         broadcastProject(slug);
         json(res, 201, { id: Number(result.lastInsertRowid), label: label.trim(), checked: false, position, children: [] });
         return;
@@ -313,7 +313,7 @@ async function handleRequest(req, res) {
           fields.checked !== undefined ? (fields.checked ? 1 : 0) : entry.checked,
           cid
         );
-        stmts.touchItem.run(now(), itemId, item.version);
+        bumpVersion(stmts, itemId, item.version);
         const updated = stmts.getChecklistItem.get(cid, itemId);
         broadcastProject(slug);
         json(res, 200, { ...updated, checked: !!updated.checked });
@@ -325,7 +325,7 @@ async function handleRequest(req, res) {
         const entry = stmts.getChecklistItem.get(cid, itemId);
         if (!entry) { json(res, 404, { error: "checklist item not found" }); return; }
         deleteChecklistRecursive(stmts, cid);
-        stmts.touchItem.run(now(), itemId, item.version);
+        bumpVersion(stmts, itemId, item.version);
         broadcastProject(slug);
         json(res, 200, { deleted: cid });
         return;
@@ -341,7 +341,7 @@ async function handleRequest(req, res) {
       const item = requireItem(stmts, id);
       const ts = now();
       const result = stmts.addComment.run(id, "human", commentBody.trim(), ts);
-      stmts.touchItem.run(ts, id, item.version);
+      bumpVersion(stmts, id, item.version);
       broadcastProject(slug);
       json(res, 201, { id: Number(result.lastInsertRowid), author: "human", body: commentBody.trim(), created_at: ts });
       return;
