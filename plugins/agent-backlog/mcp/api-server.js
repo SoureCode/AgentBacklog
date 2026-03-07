@@ -421,6 +421,7 @@ if (command === "create-project") {
 
 } else if (command === "serve" || command === undefined) {
   const port = parseInt(process.env.BACKLOG_API_PORT ?? String(DEFAULT_PORT), 10);
+  const host = process.env.BACKLOG_API_HOST ?? "127.0.0.1";
 
   // Poll for SSE broadcasts
   const pollInterval = setInterval(() => {
@@ -432,9 +433,9 @@ if (command === "create-project") {
   }, 2000);
 
   const httpServer = createServer(handleRequest);
-  httpServer.listen(port, "0.0.0.0", () => {
-    logger.info("api:started", { port });
-    console.log(`Agent Backlog API server listening on http://0.0.0.0:${port}`);
+  httpServer.listen(port, host, () => {
+    logger.info("api:started", { port, host });
+    console.log(`Agent Backlog API server listening on http://${host}:${port}`);
   });
 
   function shutdown() {
