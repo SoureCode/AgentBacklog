@@ -14,8 +14,8 @@ export class LocalStore {
     closeDatabase(this.db);
   }
 
-  listItems(status) {
-    return allSummaries(this.stmts, status);
+  listItems(status, { includeArchived = true } = {}) {
+    return allSummaries(this.stmts, status, { includeArchived });
   }
 
   getItem(id) {
@@ -44,7 +44,7 @@ export class LocalStore {
     return fullItem(this.stmts, id);
   }
 
-  searchItems(query, status) {
+  searchItems(query, status, { includeArchived = true } = {}) {
     const tokens = [];
     const phraseRe = /"([^"]+)"|(\S+)/g;
     let m;
@@ -52,9 +52,14 @@ export class LocalStore {
       tokens.push((m[1] ?? m[2]).toLowerCase());
     }
 
-    const items = status
-      ? this.stmts.listItemsByStatus.all(status)
-      : this.stmts.listItems.all();
+    let items;
+    if (status) {
+      items = this.stmts.listItemsByStatus.all(status);
+    } else if (includeArchived) {
+      items = this.stmts.listItems.all();
+    } else {
+      items = this.stmts.listItemsExcludeArchived.all();
+    }
     const scored = [];
 
     for (const item of items) {

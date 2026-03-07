@@ -65,8 +65,11 @@ export class RemoteStore {
     return res.json();
   }
 
-  async listItems(status) {
-    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+  async listItems(status, { includeArchived = true } = {}) {
+    const params = [];
+    if (status) params.push(`status=${encodeURIComponent(status)}`);
+    if (!includeArchived) params.push("exclude_archived=1");
+    const qs = params.length ? `?${params.join("&")}` : "";
     return this._fetch(`/api/items${qs}`);
   }
 
@@ -88,9 +91,10 @@ export class RemoteStore {
     });
   }
 
-  async searchItems(query, status) {
+  async searchItems(query, status, { includeArchived = true } = {}) {
     let qs = `?q=${encodeURIComponent(query)}`;
     if (status) qs += `&status=${encodeURIComponent(status)}`;
+    if (!includeArchived) qs += "&exclude_archived=1";
     return this._fetch(`/api/search${qs}`);
   }
 

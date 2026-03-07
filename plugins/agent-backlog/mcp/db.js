@@ -95,7 +95,7 @@ export function openDatabase(dbPath) {
     CREATE TABLE IF NOT EXISTS items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 255),
-      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'done')),
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'done', 'archived')),
       description TEXT NOT NULL DEFAULT '',
       version INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
@@ -142,6 +142,37 @@ export function openDatabase(dbPath) {
     // Column already exists
   }
 
+  // Migration: expand status CHECK constraint to include 'archived'
+  // SQLite doesn't support ALTER CONSTRAINT, so we recreate the table
+  try {
+    const info = db.pragma("table_info(items)");
+    const statusCol = info.find((c) => c.name === "status");
+    // If the table was created with the old constraint (no 'archived'), migrate
+    if (statusCol) {
+      // Test if 'archived' is allowed by trying a dummy update
+      const testStmt = db.prepare("UPDATE items SET status = 'archived' WHERE 0");
+      testStmt.run();
+    }
+  } catch {
+    // Constraint rejects 'archived' — need to recreate the table
+    db.exec(`
+      CREATE TABLE items_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 255),
+        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'done', 'archived')),
+        description TEXT NOT NULL DEFAULT '',
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO items_new SELECT id, title, status, description, version, created_at, updated_at FROM items;
+      DROP TABLE items;
+      ALTER TABLE items_new RENAME TO items;
+      CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
+      CREATE INDEX IF NOT EXISTS idx_items_updated_at ON items(updated_at DESC);
+    `);
+  }
+
   return db;
 }
 
@@ -150,6 +181,7 @@ export function openDatabase(dbPath) {
 export function prepareStatements(db) {
   return {
     listItems: db.prepare("SELECT * FROM items ORDER BY id"),
+    listItemsExcludeArchived: db.prepare("SELECT * FROM items WHERE status != 'archived' ORDER BY id"),
     listItemsByStatus: db.prepare("SELECT * FROM items WHERE status = ? ORDER BY id"),
     getItem: db.prepare("SELECT * FROM items WHERE id = ?"),
     createItem: db.prepare(
@@ -267,8 +299,15 @@ export function summarize(stmts, item) {
   };
 }
 
-export function allSummaries(stmts, status) {
-  const items = status ? stmts.listItemsByStatus.all(status) : stmts.listItems.all();
+export function allSummaries(stmts, status, { includeArchived = true } = {}) {
+  let items;
+  if (status) {
+    items = stmts.listItemsByStatus.all(status);
+  } else if (includeArchived) {
+    items = stmts.listItems.all();
+  } else {
+    items = stmts.listItemsExcludeArchived.all();
+  }
   return items.map((item) => summarize(stmts, item));
 }
 

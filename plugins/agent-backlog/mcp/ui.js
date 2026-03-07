@@ -112,8 +112,9 @@ function listProjects() {
         const open = byStatus.open ?? 0;
         const inProgress = byStatus.in_progress ?? 0;
         const done = byStatus.done ?? 0;
-        const total = open + inProgress + done;
-        projects.push({ slug, root: project.root, open, in_progress: inProgress, done, total });
+        const archived = byStatus.archived ?? 0;
+        const total = open + inProgress + done + archived;
+        projects.push({ slug, root: project.root, open, in_progress: inProgress, done, archived, total });
       }
     } catch {
       projects.push({ slug, root: project.root, error: true });
@@ -270,10 +271,10 @@ async function handleRequest(req, res) {
       }
 
       if (req.method === "DELETE") {
-        requireItem(stmts, id);
-        stmts.deleteItem.run(id);
+        const item = requireItem(stmts, id);
+        stmts.updateItem.run(item.title, item.description, "archived", now(), id, item.version);
         broadcastProject(slug);
-        json(res, 200, { deleted: id });
+        json(res, 200, { archived: id });
         return;
       }
     }

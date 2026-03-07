@@ -2,7 +2,8 @@ import { z } from "zod";
 
 // ── shared field types ────────────────────────────────────────────────────
 
-export const StatusEnum = z.enum(["open", "in_progress", "done"]);
+export const StatusEnum = z.enum(["open", "in_progress", "done", "archived"]);
+export const AgentStatusEnum = z.enum(["open", "in_progress", "done"]);
 export const TitleField = z.string().min(1).max(255);
 
 // ── item schemas ──────────────────────────────────────────────────────────

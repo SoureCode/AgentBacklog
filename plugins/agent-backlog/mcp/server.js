@@ -14,7 +14,7 @@ import {
 } from "./db.js";
 import { createStore, VersionConflictError } from "./store.js";
 import { startUI, stopUI } from "./ui.js";
-import { StatusEnum, TitleField } from "./schemas.js";
+import { AgentStatusEnum, TitleField } from "./schemas.js";
 
 const isRemoteMode = !!(process.env.BACKLOG_API_URL && process.env.BACKLOG_API_KEY);
 const store = createStore({ projectRoot: PROJECT_ROOT });
@@ -62,8 +62,8 @@ const server = new McpServer({ name: "agent-backlog", version: "3.0.0" });
 tool(
   "backlog_list",
   "List backlog items, optionally filtered by status. Each item includes a 'version' field for optimistic locking.",
-  { status: StatusEnum.optional() },
-  async ({ status }) => ok(await store.listItems(status))
+  { status: AgentStatusEnum.optional() },
+  async ({ status }) => ok(await store.listItems(status, { includeArchived: false }))
 );
 
 tool(
@@ -79,7 +79,7 @@ tool(
   {
     title: TitleField,
     description: z.string().optional(),
-    status: StatusEnum.optional(),
+    status: AgentStatusEnum.optional(),
   },
   async ({ title, description, status }) =>
     ok(await store.createItem({ title, description, status }))
@@ -93,7 +93,7 @@ tool(
     version: z.number().int().describe("The version number from your last backlog_get. Required for conflict detection."),
     title: TitleField.optional(),
     description: z.string().optional(),
-    status: StatusEnum.optional(),
+    status: AgentStatusEnum.optional(),
   },
   async ({ id, version, title, description, status }) =>
     ok(await store.updateItem(id, { version, title, description, status }))
@@ -186,10 +186,23 @@ tool(
   "Search backlog items by one or more keywords. Supports quoted phrases (\"exact match\"). Items are ranked by relevance: title matches score higher than description matches. All tokens must appear somewhere in the item (AND logic). Optionally filter by status.",
   {
     query: z.string().min(1),
-    status: StatusEnum.optional(),
+    status: AgentStatusEnum.optional(),
   },
   async ({ query, status }) =>
-    ok(await store.searchItems(query, status))
+    ok(await store.searchItems(query, status, { includeArchived: false }))
+);
+
+// ── soft-delete ──────────────────────────────────────────────────────────
+
+tool(
+  "backlog_delete",
+  "Soft-delete a backlog item by setting its status to 'archived'. The item remains in the database and is visible in the kanban UI, but is hidden from backlog_list and backlog_search. Requires the item's current 'version' for conflict detection.",
+  {
+    id: z.number().int(),
+    version: z.number().int().describe("The version number from your last backlog_get. Required for conflict detection."),
+  },
+  async ({ id, version }) =>
+    ok(await store.updateItem(id, { version, status: "archived" }))
 );
 
 // ── UI leader election ────────────────────────────────────────────────────
