@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { hashKey, generateApiKey } from "../auth/auth.js";
+import { hashKey, generateApiKey, authenticate } from "../auth/auth.js";
 
 // ---- hashKey ----
 describe("hashKey()", () => {
@@ -76,5 +76,73 @@ describe("checkRateLimit()", () => {
   it("isolates counters per slug", () => {
     expect(checkRateLimit("a")).toBeNull();
     expect(checkRateLimit("b")).toBeNull();
+  });
+});
+
+// ---- authenticate ----
+describe("authenticate()", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns null when no Authorization header", async () => {
+    const { authenticate } = await import("../auth/auth.js");
+    expect(authenticate({ headers: {} })).toBeNull();
+  });
+
+  it("returns null when header is not Bearer", async () => {
+    const { authenticate } = await import("../auth/auth.js");
+    expect(authenticate({ headers: { authorization: "Basic abc" } })).toBeNull();
+  });
+
+  it("returns null when key not in keys file", async () => {
+    vi.doMock("fs", async (importOriginal) => {
+      const real = await importOriginal();
+      return { ...real, existsSync: () => true, readFileSync: () => JSON.stringify({}) };
+    });
+    const { authenticate } = await import("../auth/auth.js");
+    expect(authenticate({ headers: { authorization: "Bearer sk-proj-unknown" } })).toBeNull();
+  });
+
+  it("returns slug for matching hashed key", async () => {
+    vi.doMock("fs", async (importOriginal) => {
+      const real = await importOriginal();
+      const { createHash } = await import("crypto");
+      const key = "sk-proj-testkey";
+      const hash = createHash("sha256").update(key).digest("hex");
+      const keys = { [hash]: { slug: "my-project", created: "2024-01-01" } };
+      return {
+        ...real,
+        existsSync: () => true,
+        readFileSync: () => JSON.stringify(keys),
+        mkdirSync: real.mkdirSync,
+        writeFileSync: vi.fn(),
+      };
+    });
+    const { authenticate } = await import("../auth/auth.js");
+    const slug = authenticate({ headers: { authorization: "Bearer sk-proj-testkey" } });
+    expect(slug).toBe("my-project");
+  });
+
+  it("auto-migrates plaintext key and returns slug", async () => {
+    const writeMock = vi.fn();
+    vi.doMock("fs", async (importOriginal) => {
+      const real = await importOriginal();
+      const key = "sk-proj-plaintextkey";
+      const keys = { [key]: { slug: "migrated-project", created: "2024-01-01" } };
+      return {
+        ...real,
+        existsSync: () => true,
+        readFileSync: () => JSON.stringify(keys),
+        mkdirSync: vi.fn(),
+        writeFileSync: writeMock,
+      };
+    });
+    const { authenticate } = await import("../auth/auth.js");
+    const slug = authenticate({ headers: { authorization: "Bearer sk-proj-plaintextkey" } });
+    expect(slug).toBe("migrated-project");
   });
 });

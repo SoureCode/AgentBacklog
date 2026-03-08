@@ -21,7 +21,8 @@ function createItem(stmts, title = "Test", status = "open") {
 
 describe("now()", () => {
   it("returns an ISO string", () => {
-    expect(new Date(now()).toISOString()).toBe(now());
+    const ts = now();
+    expect(new Date(ts).toISOString()).toBe(ts);
   });
 });
 
