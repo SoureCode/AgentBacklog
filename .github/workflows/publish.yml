@@ -1,0 +1,40 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: publish-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Publish @sourecode/agent-backlog-core
+        run: npm publish --workspace=packages/core --access public
+
+      - name: Publish @sourecode/agent-backlog-api
+        run: npm publish --workspace=packages/api --access public
+
+      - name: Publish @sourecode/agent-backlog-ui
+        run: npm publish --workspace=packages/ui --access public
+
+      - name: Publish @sourecode/agent-backlog-mcp
+        run: npm publish --workspace=packages/mcp --access public
