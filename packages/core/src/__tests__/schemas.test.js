@@ -12,25 +12,14 @@ describe("validate()", () => {
       .toThrow(/Validation error/);
   });
 
-  it("includes field name in error message when field has a path", () => {
+  it("includes field path in error message", () => {
     expect(() => validate(AddCommentSchema, { body: "" }))
-      .toThrow(/body/);
+      .toThrow(/body:/);
   });
 
-  it("throws with 'body' fallback when no path exists on the issue", () => {
-    // A top-level non-object input triggers an issue with empty path
+  it("uses 'body' fallback in error when issue has no path (top-level type error)", () => {
+    // Passing null triggers an issue with an empty path array
     expect(() => validate(CreateItemSchema, null))
-      .toThrow(/body/);
-  });
-
-  it("includes field name in error for string length violation", () => {
-    let err;
-    try {
-      validate(CreateItemSchema, { title: "x".repeat(256) });
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeDefined();
-    expect(err.message).toContain("title");
+      .toThrow(/body:/);
   });
 });

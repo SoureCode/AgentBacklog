@@ -31,10 +31,10 @@ describe("detectProjectRoot()", () => {
       };
     });
     const { detectProjectRoot } = await import("../config/project-root.js");
-    // Should return the directory containing .git — i.e. cwd or a resolved path
-    const result = detectProjectRoot();
-    expect(typeof result).toBe("string");
-    expect(result.length).toBeGreaterThan(0);
+    // Mock returns ".git" (relative), so dirname(resolve(cwd, ".git")) === cwd
+    const { dirname, resolve } = await import("path");
+    const expected = dirname(resolve(process.cwd(), ".git"));
+    expect(detectProjectRoot()).toBe(expected);
   });
 
   it("returns cwd when git command fails", async () => {

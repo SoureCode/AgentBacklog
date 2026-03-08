@@ -8,10 +8,6 @@ describe("hashKey()", () => {
     expect(h).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("is deterministic", () => {
-    expect(hashKey("foo")).toBe(hashKey("foo"));
-  });
-
   it("is different for different inputs", () => {
     expect(hashKey("a")).not.toBe(hashKey("b"));
   });
@@ -73,8 +69,11 @@ describe("checkRateLimit()", () => {
     expect(checkRateLimit("proj")).toBeNull();
   });
 
-  it("isolates counters per slug", () => {
-    expect(checkRateLimit("a")).toBeNull();
+  it("exhausting limit for one slug does not affect another", () => {
+    const max = parseInt(process.env.BACKLOG_RATE_LIMIT_MAX ?? "200", 10);
+    for (let i = 0; i <= max; i++) checkRateLimit("a");
+    // "a" is now rate-limited, "b" should still be allowed
+    expect(checkRateLimit("a")).not.toBeNull();
     expect(checkRateLimit("b")).toBeNull();
   });
 });

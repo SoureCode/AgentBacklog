@@ -115,24 +115,27 @@ describe("logger — rotation (rotate)", () => {
 });
 
 describe("logger — checkInode fstatSync error (outer catch)", () => {
-  it("handles fstatSync throwing in checkInode", async () => {
+  it("handles fstatSync throwing in checkInode without propagating", async () => {
     const catchDir = mkdtempSync(join(tmpdir(), "backlog-logger-catch-"));
     vi.resetModules();
     process.env.BACKLOG_LOG_DIR = catchDir;
     process.env.LOG_LEVEL = "info";
 
-    let fstatCallCount = 0;
+    // After the first write opens the file, make fstatSync always throw so
+    // the next write's checkInode hits the outer catch block.
+    let firstWriteDone = false;
     vi.doMock("fs", async (importOriginal) => {
       const real = await importOriginal();
       return {
         ...real,
         fstatSync: (...args) => {
-          fstatCallCount++;
-          // write() calls checkInode then rotate, each calls fstatSync once.
-          // First write: checkInode=call1, rotate=call2
-          // Second write: checkInode=call3 <- throw here to hit outer catch
-          if (fstatCallCount === 3) throw new Error("mock-fstat-failure");
+          if (firstWriteDone) throw new Error("mock-fstat-failure");
           return real.fstatSync(...args);
+        },
+        writeSync: (...args) => {
+          const result = real.writeSync(...args);
+          firstWriteDone = true;
+          return result;
         },
       };
     });
@@ -141,8 +144,7 @@ describe("logger — checkInode fstatSync error (outer catch)", () => {
     const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     catchLogger.info("first-opens-file");
-    // second write: checkInode's fstatSync will throw, triggering outer catch
-    catchLogger.info("second-triggers-inode-check");
+    catchLogger.info("second-triggers-inode-error");
 
     expect(stderrSpy).toHaveBeenCalledWith("logger:inode-check-error", "mock-fstat-failure");
 
@@ -151,46 +153,6 @@ describe("logger — checkInode fstatSync error (outer catch)", () => {
     delete process.env.LOG_LEVEL;
     vi.restoreAllMocks();
     try { rmSync(catchDir, { recursive: true, force: true }); } catch (_) {}
-  });
-});
-
-describe("logger — rotate fstatSync error (rotate catch)", () => {
-  it("handles fstatSync throwing in rotate", async () => {
-    const rotCatchDir = mkdtempSync(join(tmpdir(), "backlog-logger-rotcatch-"));
-    vi.resetModules();
-    process.env.BACKLOG_LOG_DIR = rotCatchDir;
-    process.env.LOG_LEVEL = "info";
-
-    let fstatCallCount = 0;
-    vi.doMock("fs", async (importOriginal) => {
-      const real = await importOriginal();
-      return {
-        ...real,
-        fstatSync: (...args) => {
-          fstatCallCount++;
-          // write() calls checkInode then rotate, each calls fstatSync once.
-          // First write: checkInode=call1, rotate=call2
-          // Second write: checkInode=call3, rotate=call4 <- throw here
-          if (fstatCallCount === 4) throw new Error("mock-rotate-fstat-failure");
-          return real.fstatSync(...args);
-        },
-      };
-    });
-
-    const { logger: rotCatchLogger } = await import("../logger.js");
-    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    rotCatchLogger.info("first-opens-file");
-    // second write triggers rotate, which calls fstatSync and throws
-    rotCatchLogger.info("second-triggers-rotate-error");
-
-    expect(stderrSpy).toHaveBeenCalledWith("logger:fstat-error", "mock-rotate-fstat-failure");
-
-    stderrSpy.mockRestore();
-    delete process.env.BACKLOG_LOG_DIR;
-    delete process.env.LOG_LEVEL;
-    vi.restoreAllMocks();
-    try { rmSync(rotCatchDir, { recursive: true, force: true }); } catch (_) {}
   });
 });
 

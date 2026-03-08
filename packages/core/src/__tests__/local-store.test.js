@@ -194,12 +194,12 @@ describe("LocalStore — searchItems includeArchived", () => {
     expect(results.length).toBe(0);
   });
 
-  it("filters by status when status is provided", () => {
+  it("ranks title matches above description matches", () => {
     const store = makeStore();
-    store.createItem({ title: "Gamma thing" });
-    const results = store.searchItems("thing", "open");
-    expect(results.length).toBe(1);
-    expect(results[0].status).toBe("open");
+    store.createItem({ title: "bug report", description: "nothing" });
+    store.createItem({ title: "unrelated task", description: "has a bug in the description" });
+    const results = store.searchItems("bug");
+    expect(results[0].title).toBe("bug report"); // title match scores higher
   });
 });
 
