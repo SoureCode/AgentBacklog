@@ -9,6 +9,10 @@ if (!slug) {
   console.error("Usage: create-project <slug>");
   process.exit(1);
 }
+if (!/^[a-z0-9-]+$/.test(slug)) {
+  console.error(`Error: slug "${slug}" is invalid. Only lowercase letters, digits, and hyphens are allowed.`);
+  process.exit(1);
+}
 
 mkdirSync(API_DATA_DB_DIR, { recursive: true });
 const keys = loadApiKeys();
