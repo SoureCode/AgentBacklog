@@ -1,5 +1,16 @@
 {
   "name": "agent-backlog-monorepo",
   "private": true,
-  "workspaces": ["packages/core", "packages/ui", "packages/api", "packages/mcp"]
+  "workspaces": [
+    "packages/core",
+    "packages/ui",
+    "packages/api",
+    "packages/mcp"
+  ],
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
 }
