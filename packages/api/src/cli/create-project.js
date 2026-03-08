@@ -1,6 +1,6 @@
 import { mkdirSync } from "fs";
 import { join } from "path";
-import { loadApiKeys, saveApiKeys, generateApiKey } from "../auth/auth.js";
+import { loadApiKeys, saveApiKeys, generateApiKey, hashKey } from "../auth/auth.js";
 import { API_DATA_DB_DIR } from "@sourecode/agent-backlog-core/config.js";
 import { getStoreForSlug } from "../store/store.js";
 
@@ -17,16 +17,16 @@ if (!/^[a-z0-9-]+$/.test(slug)) {
 mkdirSync(API_DATA_DB_DIR, { recursive: true });
 const keys = loadApiKeys();
 
-for (const [key, entry] of Object.entries(keys)) {
+for (const [, entry] of Object.entries(keys)) {
   if (entry.slug === slug) {
     console.log(`Project "${slug}" already exists.`);
-    console.log(`API Key: ${key}`);
+    console.log(`(API key is hashed at rest and cannot be recovered. Delete and recreate the project to issue a new key.)`);
     process.exit(0);
   }
 }
 
 const apiKey = generateApiKey();
-keys[apiKey] = { slug, created: new Date().toISOString() };
+keys[hashKey(apiKey)] = { slug, created: new Date().toISOString() };
 saveApiKeys(keys);
 
 const store = getStoreForSlug(slug);

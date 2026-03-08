@@ -1,7 +1,11 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { randomBytes } from "crypto";
+import { randomBytes, createHash, timingSafeEqual } from "crypto";
 import { logger } from "@sourecode/agent-backlog-core/logger.js";
 import { API_DATA_DIR, API_DATA_KEYS_PATH } from "@sourecode/agent-backlog-core/config.js";
+
+export function hashKey(key) {
+  return createHash("sha256").update(key).digest("hex");
+}
 
 export function loadApiKeys() {
   if (!existsSync(API_DATA_KEYS_PATH)) return {};
@@ -26,8 +30,36 @@ export function authenticate(req) {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith("Bearer ")) return null;
   const key = auth.slice(7);
+  const keyHash = hashKey(key);
+  const keyHashBuf = Buffer.from(keyHash, "hex");
+
   const keys = loadApiKeys();
-  const entry = keys[key];
-  if (!entry) return null;
-  return entry.slug;
+  let migrated = false;
+
+  for (const [stored, entry] of Object.entries(keys)) {
+    // Auto-migrate plaintext keys (they start with "sk-proj-")
+    if (stored.startsWith("sk-proj-")) {
+      const storedHash = hashKey(stored);
+      delete keys[stored];
+      keys[storedHash] = entry;
+      migrated = true;
+      logger.info("api-keys:migrated-plaintext-key", { slug: entry.slug });
+      if (storedHash === keyHash) return entry.slug;
+      continue;
+    }
+
+    // Constant-time comparison of hashes
+    try {
+      const storedBuf = Buffer.from(stored, "hex");
+      if (storedBuf.length === keyHashBuf.length && timingSafeEqual(storedBuf, keyHashBuf)) {
+        if (migrated) saveApiKeys(keys);
+        return entry.slug;
+      }
+    } catch {
+      // stored value is not valid hex — skip
+    }
+  }
+
+  if (migrated) saveApiKeys(keys);
+  return null;
 }
