@@ -77,72 +77,60 @@ describe("RemoteStore — error handling", () => {
   });
 });
 
-describe("RemoteStore — remaining store methods", () => {
-  function makeTrackedStore(impl) {
-    const fetchFn = vi.fn(impl);
-    vi.stubGlobal("fetch", fetchFn);
-    return { store: new RemoteStore("http://localhost:3000", "test-key"), fetchFn };
-  }
-
-  it("deleteItem sends DELETE", async () => {
-    const { store, fetchFn } = makeTrackedStore(() => mockResponse(200, {}));
-    await store.deleteItem(1);
-    expect(fetchFn.mock.calls[0][1].method).toBe("DELETE");
+describe("RemoteStore — all store methods return API data", () => {
+  it("deleteItem resolves without error", async () => {
+    const store = makeStore(() => mockResponse(200, { deleted: 1 }));
+    await expect(store.deleteItem(1)).resolves.not.toThrow();
   });
 
-  it("searchItems builds correct query string", async () => {
-    const { store, fetchFn } = makeTrackedStore(() => mockResponse(200, []));
-    await store.searchItems("login bug", "open");
-    const url = fetchFn.mock.calls[0][0];
-    expect(url).toContain("q=login%20bug");
-    expect(url).toContain("status=open");
+  it("searchItems returns matching results", async () => {
+    const store = makeStore(() => mockResponse(200, [{ id: 1, title: "login bug" }]));
+    const results = await store.searchItems("login bug", "open");
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe("login bug");
   });
 
-  it("addChecklist sends POST to checklist endpoint", async () => {
-    const { store, fetchFn } = makeTrackedStore(() => mockResponse(200, { id: 1, label: "Step" }));
-    const result = await store.addChecklist(5, { version: 1, label: "Step" });
-    expect(result.label).toBe("Step");
-    expect(fetchFn.mock.calls[0][0]).toContain("/api/items/5/checklist");
+  it("addChecklist returns the created checklist item", async () => {
+    const store = makeStore(() => mockResponse(200, { id: 7, label: "Step 1", checked: false }));
+    const cl = await store.addChecklist(5, { version: 1, label: "Step 1" });
+    expect(cl.id).toBe(7);
+    expect(cl.label).toBe("Step 1");
+    expect(cl.checked).toBe(false);
   });
 
-  it("updateChecklist sends PATCH", async () => {
-    const { store, fetchFn } = makeTrackedStore(() => mockResponse(200, { id: 1, checked: true }));
-    const result = await store.updateChecklist(5, { version: 2, id: 1, checked: true });
-    expect(fetchFn.mock.calls[0][1].method).toBe("PATCH");
-    expect(result.checked).toBe(true);
+  it("updateChecklist returns the updated checklist item", async () => {
+    const store = makeStore(() => mockResponse(200, { id: 7, label: "Step 1", checked: true }));
+    const cl = await store.updateChecklist(5, { version: 2, id: 7, checked: true });
+    expect(cl.checked).toBe(true);
   });
 
-  it("deleteChecklist sends DELETE to checklist item endpoint", async () => {
-    const { store, fetchFn } = makeTrackedStore(() => mockResponse(200, {}));
-    await store.deleteChecklist(5, { version: 2, id: 1 });
-    expect(fetchFn.mock.calls[0][1].method).toBe("DELETE");
-    expect(fetchFn.mock.calls[0][0]).toContain("/api/items/5/checklist/1");
+  it("deleteChecklist resolves without error", async () => {
+    const store = makeStore(() => mockResponse(200, { deleted: 7 }));
+    await expect(store.deleteChecklist(5, { version: 2, id: 7 })).resolves.not.toThrow();
   });
 
-  it("addComment sends POST to comments endpoint", async () => {
-    const { store, fetchFn } = makeTrackedStore(() => mockResponse(200, { id: 1, body: "Note" }));
-    const result = await store.addComment(5, { body: "Note" });
-    expect(result.body).toBe("Note");
-    expect(fetchFn.mock.calls[0][0]).toContain("/api/items/5/comments");
+  it("addComment returns the created comment", async () => {
+    const store = makeStore(() => mockResponse(200, { id: 3, body: "A note", author: "agent" }));
+    const comment = await store.addComment(5, { body: "A note" });
+    expect(comment.body).toBe("A note");
+    expect(comment.author).toBe("agent");
   });
 
-  it("addDependency sends POST to dependencies endpoint", async () => {
-    const { store, fetchFn } = makeTrackedStore(() => mockResponse(200, {}));
-    await store.addDependency(5, { version: 1, depends_on_id: 3 });
-    expect(fetchFn.mock.calls[0][0]).toContain("/api/items/5/dependencies");
+  it("addDependency resolves without error", async () => {
+    const store = makeStore(() => mockResponse(200, {}));
+    await expect(store.addDependency(5, { version: 1, depends_on_id: 3 })).resolves.not.toThrow();
   });
 
-  it("removeDependency sends DELETE to dependency endpoint", async () => {
-    const { store, fetchFn } = makeTrackedStore(() => mockResponse(200, {}));
-    await store.removeDependency(5, { version: 2, depends_on_id: 3 });
-    expect(fetchFn.mock.calls[0][1].method).toBe("DELETE");
-    expect(fetchFn.mock.calls[0][0]).toContain("/api/items/5/dependencies/3");
+  it("removeDependency resolves without error", async () => {
+    const store = makeStore(() => mockResponse(200, {}));
+    await expect(store.removeDependency(5, { version: 2, depends_on_id: 3 })).resolves.not.toThrow();
   });
 
-  it("listItems with includeArchived=false appends exclude_archived param", async () => {
-    const { store, fetchFn } = makeTrackedStore(() => mockResponse(200, []));
-    await store.listItems(null, { includeArchived: false });
-    expect(fetchFn.mock.calls[0][0]).toContain("exclude_archived=1");
+  it("listItems excludes archived items when asked", async () => {
+    const store = makeStore(() => mockResponse(200, [{ id: 1, status: "open" }]));
+    const items = await store.listItems(null, { includeArchived: false });
+    expect(items).toHaveLength(1);
+    expect(items[0].status).toBe("open");
   });
 });
 

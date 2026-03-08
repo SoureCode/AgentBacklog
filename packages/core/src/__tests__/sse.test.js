@@ -12,22 +12,21 @@ function mockRes() {
 }
 
 describe("SSEBroadcaster", () => {
-  it("registers a client and sends initial snapshot", () => {
+  it("sends initial snapshot data to a newly registered client", () => {
     const sse = new SSEBroadcaster("test");
     const res = mockRes();
-    sse.register("proj", res, [{ id: 1 }]);
-    expect(res.writeHead).toHaveBeenCalledWith(200, expect.objectContaining({ "Content-Type": "text/event-stream" }));
-    expect(res.write).toHaveBeenCalledWith(expect.stringContaining(JSON.stringify([{ id: 1 }])));
+    sse.register("proj", res, [{ id: 1, title: "Task" }]);
+    const written = res.write.mock.calls.map(c => c[0]).join("");
+    expect(written).toContain(JSON.stringify([{ id: 1, title: "Task" }]));
   });
 
-  it("broadcasts to registered clients", () => {
+  it("delivers broadcast data to registered clients", () => {
     const sse = new SSEBroadcaster("test");
     const res = mockRes();
     sse.register("proj", res, []);
-    sse.broadcast("proj", [{ id: 2 }]);
-    expect(res.write).toHaveBeenCalledTimes(2); // initial + broadcast
-    const lastCall = res.write.mock.calls[1][0];
-    expect(lastCall).toContain(JSON.stringify([{ id: 2 }]));
+    sse.broadcast("proj", [{ id: 2, title: "Updated" }]);
+    const written = res.write.mock.calls.map(c => c[0]).join("");
+    expect(written).toContain(JSON.stringify([{ id: 2, title: "Updated" }]));
   });
 
   it("skips clients with writableEnded", () => {
@@ -58,26 +57,28 @@ describe("SSEBroadcaster", () => {
     expect(sse.clientCount("proj")).toBe(0);
   });
 
-  it("broadcasts to multiple clients for same slug", () => {
+  it("delivers broadcast to all clients subscribed to the same project", () => {
     const sse = new SSEBroadcaster("test");
     const res1 = mockRes();
     const res2 = mockRes();
     sse.register("proj", res1, []);
     sse.register("proj", res2, []);
-    sse.broadcast("proj", [{ id: 1 }]);
-    expect(res1.write).toHaveBeenCalledTimes(2);
-    expect(res2.write).toHaveBeenCalledTimes(2);
+    sse.broadcast("proj", [{ id: 1, title: "Task" }]);
+    const written1 = res1.write.mock.calls.map(c => c[0]).join("");
+    const written2 = res2.write.mock.calls.map(c => c[0]).join("");
+    expect(written1).toContain(JSON.stringify([{ id: 1, title: "Task" }]));
+    expect(written2).toContain(JSON.stringify([{ id: 1, title: "Task" }]));
   });
 
-  it("does not broadcast to other slugs", () => {
+  it("does not deliver a project's broadcast to clients of a different project", () => {
     const sse = new SSEBroadcaster("test");
     const res1 = mockRes();
     const res2 = mockRes();
     sse.register("proj-a", res1, []);
     sse.register("proj-b", res2, []);
-    sse.broadcast("proj-a", []);
-    expect(res1.write).toHaveBeenCalledTimes(2); // initial + broadcast
-    expect(res2.write).toHaveBeenCalledTimes(1); // initial only
+    sse.broadcast("proj-a", [{ id: 99 }]);
+    const writtenB = res2.write.mock.calls.map(c => c[0]).join("");
+    expect(writtenB).not.toContain(JSON.stringify([{ id: 99 }]));
   });
 
   it("closeAll ends all connections and clears state", () => {

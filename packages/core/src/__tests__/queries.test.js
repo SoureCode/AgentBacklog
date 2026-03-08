@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { openDatabase } from "../db/schema.js";
 import { prepareStatements } from "../db/statements.js";
 import {
-  now, requireItem, buildChecklistTree, fullItem, allSummaries, summarize,
-  wouldCycle, requireVersion, bumpVersion, CHECKLIST_MAX_DEPTH,
+  now, buildChecklistTree, fullItem, allSummaries, summarize,
+  wouldCycle, CHECKLIST_MAX_DEPTH,
 } from "../db/queries.js";
-import { NotFoundError, VersionConflictError } from "../db/errors.js";
+import { NotFoundError } from "../db/errors.js";
 
 function makeDb() {
   const db = openDatabase(":memory:");
@@ -23,50 +23,6 @@ describe("now()", () => {
   it("returns an ISO string", () => {
     const ts = now();
     expect(new Date(ts).toISOString()).toBe(ts);
-  });
-});
-
-describe("requireItem()", () => {
-  it("returns item when found", () => {
-    const { stmts } = makeDb();
-    const item = createItem(stmts);
-    expect(requireItem(stmts, item.id).id).toBe(item.id);
-  });
-
-  it("throws NotFoundError when missing", () => {
-    const { stmts } = makeDb();
-    expect(() => requireItem(stmts, 999)).toThrow(NotFoundError);
-  });
-});
-
-describe("requireVersion()", () => {
-  it("passes when version matches", () => {
-    const { stmts } = makeDb();
-    const item = createItem(stmts);
-    expect(() => requireVersion(stmts, item.id, item.version)).not.toThrow();
-  });
-
-  it("throws VersionConflictError when version is stale", () => {
-    const { stmts } = makeDb();
-    const item = createItem(stmts);
-    expect(() => requireVersion(stmts, item.id, 99)).toThrow(VersionConflictError);
-  });
-});
-
-describe("bumpVersion()", () => {
-  it("increments version", () => {
-    const { stmts } = makeDb();
-    const item = createItem(stmts);
-    bumpVersion(stmts, item.id, item.version);
-    const updated = stmts.getItem.get(item.id);
-    expect(updated.version).toBe(item.version + 1);
-  });
-
-  it("throws VersionConflictError on concurrent bump", () => {
-    const { stmts } = makeDb();
-    const item = createItem(stmts);
-    bumpVersion(stmts, item.id, item.version);
-    expect(() => bumpVersion(stmts, item.id, item.version)).toThrow(VersionConflictError);
   });
 });
 

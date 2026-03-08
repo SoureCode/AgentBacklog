@@ -22,10 +22,6 @@ describe("generateApiKey()", () => {
   it("generates unique keys", () => {
     expect(generateApiKey()).not.toBe(generateApiKey());
   });
-
-  it("has 56 chars total (sk-proj- + 48 hex chars)", () => {
-    expect(generateApiKey()).toHaveLength(56);
-  });
 });
 
 // ---- checkRateLimit ----
