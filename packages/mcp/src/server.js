@@ -6,7 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { logger } from "@sourecode/agent-backlog-core/logger.js";
 import { registerProject, resolveProjectDb, migrateAllProjects } from "@sourecode/agent-backlog-core/db/registry.js";
-import { createStore, VersionConflictError } from "@sourecode/agent-backlog-core/store.js";
+import { createStore } from "@sourecode/agent-backlog-core/store.js";
 import { registerItemTools } from "./tools/items.js";
 import { registerChecklistTools } from "./tools/checklists.js";
 import { registerCommentTools } from "./tools/comments.js";
