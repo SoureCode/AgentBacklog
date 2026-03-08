@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd ${CLAUDE_PLUGIN_ROOT}/mcp && npm install --no-audit --no-fund"
+          }
+        ]
+      }
+    ]
+  }
+}

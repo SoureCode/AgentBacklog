@@ -1,0 +1,35 @@
+{
+  "name": "@sourecode/agent-backlog-core",
+  "version": "0.1.0",
+  "description": "Core SQLite store, schemas, and HTTP helpers for Agent Backlog",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SoureCode/AgentBacklog.git",
+    "directory": "packages/core"
+  },
+  "keywords": ["agent", "backlog", "mcp", "kanban", "sqlite", "task-management"],
+  "files": ["src"],
+  "exports": {
+    "./config.js":        "./src/config/config.js",
+    "./project-root.js":  "./src/config/project-root.js",
+    "./db/errors.js":     "./src/db/errors.js",
+    "./db/registry.js":   "./src/db/registry.js",
+    "./db/schema.js":     "./src/db/schema.js",
+    "./db/statements.js": "./src/db/statements.js",
+    "./db/queries.js":    "./src/db/queries.js",
+    "./db/leader.js":     "./src/db/leader.js",
+    "./logger.js":        "./src/logger.js",
+    "./schemas.js":       "./src/schemas.js",
+    "./store.js":         "./src/store/store.js",
+    "./store/local.js":   "./src/store/local.js",
+    "./store/remote.js":  "./src/store/remote.js",
+    "./http/helpers.js":  "./src/http/helpers.js",
+    "./http/sse.js":      "./src/http/sse.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "zod": "^3.25 || ^4.0"
+  }
+}

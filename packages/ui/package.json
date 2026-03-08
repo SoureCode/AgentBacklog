@@ -1,0 +1,19 @@
+{
+  "name": "@sourecode/agent-backlog-ui",
+  "version": "0.1.0",
+  "description": "Local kanban UI with SSE live updates for Agent Backlog",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SoureCode/AgentBacklog.git",
+    "directory": "packages/ui"
+  },
+  "keywords": ["agent", "backlog", "mcp", "kanban", "ui", "task-management"],
+  "exports": { ".": "./src/ui.js" },
+  "bin": { "agent-backlog-ui": "./src/ui.js" },
+  "files": ["src"],
+  "dependencies": {
+    "@sourecode/agent-backlog-core": "^0.1.0"
+  }
+}

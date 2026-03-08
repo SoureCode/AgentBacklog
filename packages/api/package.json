@@ -1,0 +1,23 @@
+{
+  "name": "@sourecode/agent-backlog-api",
+  "version": "0.1.0",
+  "description": "REST API server for Agent Backlog team/shared mode",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SoureCode/AgentBacklog.git",
+    "directory": "packages/api"
+  },
+  "keywords": ["agent", "backlog", "mcp", "kanban", "api", "task-management"],
+  "bin": {
+    "agent-backlog-api": "./bin/serve.js",
+    "agent-backlog-create-project": "./bin/create-project.js",
+    "agent-backlog-list-projects": "./bin/list-projects.js",
+    "agent-backlog-delete-project": "./bin/delete-project.js"
+  },
+  "files": ["bin", "src"],
+  "dependencies": {
+    "@sourecode/agent-backlog-core": "^0.1.0"
+  }
+}

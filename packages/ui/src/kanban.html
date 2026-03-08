@@ -1,0 +1,1350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backlog - Kanban</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-hover: #1c2129;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --accent-open: #3fb950;
+  --accent-progress: #d29922;
+  --accent-done: #8b949e;
+  --card-bg: #0d1117;
+  --card-hover: #161b22;
+  --shadow: 0 1px 3px rgba(0,0,0,0.3);
+  --radius: 6px;
+  --blue: #3b82f6;
+  --blue-hover: #2563eb;
+  --red: #f85149;
+  --red-hover: #da3633;
+}
+
+/* Log drawer */
+.log-drawer {
+  display: none; position: fixed; bottom: 0; left: 0; right: 0;
+  height: 320px; background: #0a0d12; border-top: 1px solid var(--border);
+  z-index: 50; flex-direction: column;
+}
+.log-drawer.open { display: flex; }
+.log-drawer-header {
+  display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+  border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0;
+}
+.log-drawer-header h2 { font-size: 13px; font-weight: 600; flex: 1; }
+.log-entries {
+  flex: 1; overflow-y: auto; padding: 8px 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 12px;
+}
+.log-entry {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 2px 16px; line-height: 1.5;
+}
+.log-entry:hover { background: rgba(255,255,255,0.03); }
+.log-time { color: #484f58; white-space: nowrap; flex-shrink: 0; }
+.log-level {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 3px; white-space: nowrap; flex-shrink: 0; letter-spacing: 0.5px;
+}
+.log-level.trace { background: rgba(139,148,158,0.15); color: #8b949e; }
+.log-level.debug { background: rgba(56,139,253,0.15); color: #58a6ff; }
+.log-level.info  { background: rgba(63,185,80,0.15);  color: #3fb950; }
+.log-level.warn  { background: rgba(210,153,34,0.15); color: #d29922; }
+.log-level.error { background: rgba(248,81,73,0.15);  color: #f85149; }
+.log-msg { color: var(--text); flex: 1; min-width: 0; }
+.log-extra { color: #484f58; white-space: pre; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface);
+}
+
+header h1 { font-size: 18px; font-weight: 600; }
+.refresh-info { font-size: 12px; color: var(--text-muted); }
+
+/* Board */
+.board {
+  display: flex;
+  gap: 16px;
+  padding: 24px;
+  min-height: calc(100vh - 57px);
+  overflow-x: auto;
+  transition: padding-bottom 0.2s;
+}
+body.logs-open .board { padding-bottom: 340px; }
+
+.column { flex: 1; min-width: 280px; max-width: 400px; display: flex; flex-direction: column; }
+
+.column-header {
+  display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0; font-size: 14px; font-weight: 600;
+}
+
+.column-header .dot { width: 10px; height: 10px; border-radius: 50%; }
+.column-header .count {
+  margin-left: auto; font-size: 12px; color: var(--text-muted);
+  background: var(--bg); padding: 1px 8px; border-radius: 10px;
+}
+
+.col-open .dot { background: var(--accent-open); }
+.col-in_progress .dot { background: var(--accent-progress); }
+.col-done .dot { background: var(--accent-done); }
+.col-archived .dot { background: #484f58; }
+
+.column-body {
+  flex: 1; background: var(--surface); border: 1px solid var(--border); border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius); padding: 8px;
+  display: flex; flex-direction: column; gap: 8px; min-height: 120px;
+}
+
+.column-body.drag-over { background: var(--surface-hover); outline: 2px dashed var(--border); outline-offset: -4px; }
+
+/* Cards */
+.card {
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px; cursor: grab; transition: background 0.15s, box-shadow 0.15s;
+}
+.card:hover { background: var(--card-hover); box-shadow: var(--shadow); }
+.card.dragging { opacity: 0.5; }
+.card-title { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+.card-id { font-size: 12px; color: var(--text-muted); margin-right: 6px; }
+.card-meta { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-muted); }
+
+.checklist-progress { display: flex; align-items: center; gap: 6px; }
+.progress-bar { display: inline-block; width: 80px; height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; vertical-align: middle; }
+.progress-bar-fill { display: block; height: 100%; border-radius: 4px; transition: width 0.3s; }
+.progress-bar-fill.pct-0 { background: #484f58; }
+.progress-bar-fill.pct-low { background: #f85149; }
+.progress-bar-fill.pct-mid { background: #d29922; }
+.progress-bar-fill.pct-high { background: #3fb950; }
+.progress-bar-fill.pct-full { background: #3fb950; }
+.progress-text { font-size: 11px; font-weight: 500; color: var(--text-muted); white-space: nowrap; }
+.progress-text.pct-full { color: #3fb950; }
+.deps { font-size: 11px; color: var(--text-muted); }
+.empty-col { text-align: center; padding: 24px 16px; color: var(--text-muted); font-size: 13px; }
+
+/* Modal */
+.modal-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  z-index: 100; align-items: flex-start; justify-content: center; padding-top: 10vh;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  width: 700px; max-width: 90vw; max-height: 80vh; overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.modal-header {
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: flex-start;
+}
+.modal-header h2 { font-size: 16px; font-weight: 600; }
+.modal-close {
+  background: none; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 20px; line-height: 1; padding: 0 4px;
+}
+.modal-close:hover { color: var(--text); }
+.modal-body { padding: 20px; }
+.modal-footer {
+  padding: 12px 20px; border-top: 1px solid var(--border);
+  display: flex; justify-content: flex-end;
+}
+.modal-body section {
+  margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden;
+}
+.modal-body section:last-child { margin-bottom: 0; }
+
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--border);
+}
+
+.section-header h3 {
+  font-size: 12px; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.8px; margin: 0;
+}
+
+.section-content { padding: 12px; }
+
+.modal-body h3 {
+  font-size: 12px; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px;
+}
+
+/* Markdown */
+.md { font-size: 14px; line-height: 1.6; }
+.md p { margin: 0 0 8px; }
+.md p:last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3, .md h4 { margin: 12px 0 6px; font-weight: 600; color: var(--text); }
+.md h1 { font-size: 18px; } .md h2 { font-size: 16px; } .md h3 { font-size: 14px; } .md h4 { font-size: 13px; }
+.md strong { font-weight: 600; } .md em { font-style: italic; }
+.md code {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+  padding: 1px 5px; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 0.9em;
+}
+.md pre {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 12px; margin: 8px 0; overflow-x: auto;
+}
+.md pre code { background: none; border: none; padding: 0; font-size: 13px; }
+.md ul, .md ol { margin: 4px 0 8px; padding-left: 20px; }
+.md li { margin: 2px 0; }
+.md blockquote { border-left: 3px solid var(--border); padding: 2px 12px; margin: 8px 0; color: var(--text-muted); }
+.md hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.md a { color: #58a6ff; text-decoration: none; }
+.md a:hover { text-decoration: underline; }
+.item-ref {
+  color: #58a6ff; text-decoration: none; font-weight: 600; cursor: pointer;
+  background: rgba(88,166,255,0.1); padding: 0 4px; border-radius: 3px;
+}
+.item-ref:hover { text-decoration: underline; background: rgba(88,166,255,0.2); }
+
+/* Interactive checklist */
+.cl-item {
+  display: flex; align-items: flex-start; gap: 6px; padding: 3px 0; font-size: 13px;
+}
+
+.cl-item .cl-check {
+  width: 16px; height: 16px; border: 1px solid var(--border); border-radius: 3px;
+  flex-shrink: 0; margin-top: 1px; cursor: pointer; background: none;
+  display: flex; align-items: center; justify-content: center; color: transparent;
+  font-size: 11px; padding: 0;
+}
+
+.cl-item .cl-check.checked { background: var(--accent-open); border-color: var(--accent-open); color: #fff; }
+.cl-item .cl-label { flex: 1; min-width: 0; }
+.cl-label code {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+  padding: 1px 5px; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 0.9em;
+}
+.cl-label a { color: #58a6ff; text-decoration: none; }
+.cl-label a:hover { text-decoration: underline; }
+.cl-item .cl-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; flex-shrink: 0; }
+.cl-item:hover .cl-actions { opacity: 1; }
+
+.cl-nested { margin-left: 22px; }
+
+/* Small icon buttons */
+.btn-icon {
+  background: none; border: 1px solid var(--border); color: var(--text-muted); cursor: pointer;
+  padding: 4px 8px; font-size: 15px; border-radius: 4px; min-width: 28px; min-height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.btn-icon:hover { background: var(--bg); color: var(--text); }
+.btn-icon.danger:hover { color: var(--red); }
+
+/* Inline edit */
+.inline-edit {
+  display: flex; gap: 6px; align-items: center; flex: 1;
+}
+.inline-edit input {
+  flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+  color: var(--text); font-size: 13px; padding: 2px 6px; font-family: inherit;
+}
+.inline-edit input:focus { outline: none; border-color: var(--blue); }
+
+/* Add checklist form */
+.cl-add-form {
+  display: flex; gap: 6px; margin-top: 6px; align-items: center;
+}
+.cl-add-form input {
+  flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font-size: 13px; padding: 4px 8px; font-family: inherit;
+}
+.cl-add-form input:focus { outline: none; border-color: var(--blue); }
+.cl-add-form input::placeholder { color: var(--text-muted); }
+
+/* Buttons */
+.btn {
+  background: var(--blue); color: #fff; border: none; border-radius: var(--radius);
+  padding: 4px 10px; font-size: 12px; font-weight: 500; cursor: pointer; white-space: nowrap;
+}
+.btn:hover { background: var(--blue-hover); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-sm { padding: 2px 8px; font-size: 11px; }
+.btn-ghost {
+  background: none; color: var(--text-muted); border: 1px solid var(--border);
+}
+.btn-ghost:hover { background: var(--bg); color: var(--text); }
+
+/* Textarea */
+.edit-textarea {
+  width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 13px; padding: 8px 10px; resize: none; min-height: 100px; overflow: hidden;
+}
+.edit-textarea:focus { outline: none; border-color: var(--blue); }
+.edit-textarea::placeholder { color: var(--text-muted); }
+.edit-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+/* Comments */
+.comment {
+  border-left: 3px solid var(--border); padding: 6px 12px;
+  margin-bottom: 8px; font-size: 13px; line-height: 1.5;
+}
+.comment.comment-agent { border-left-color: #8b5cf6; background: rgba(139,92,246,0.05); }
+.comment.comment-human { border-left-color: var(--blue); background: rgba(59,130,246,0.05); }
+.comment-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.comment-date { font-size: 11px; color: var(--text-muted); }
+.comment-author { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 8px; }
+.comment-author.agent { background: rgba(139,92,246,0.15); color: #a78bfa; }
+.comment-author.human { background: rgba(59,130,246,0.15); color: #60a5fa; }
+
+/* Metadata */
+.meta-bar {
+  display: flex; flex-direction: column; font-size: 12px; color: var(--text-muted);
+  margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden;
+}
+.meta-item {
+  display: flex; align-items: center; padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.meta-item:last-child { border-bottom: none; }
+.meta-label {
+  font-size: 11px; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px;
+}
+.meta-value { color: var(--text); }
+
+.comment-form { display: flex; gap: 8px; margin-top: 8px; }
+.comment-form textarea {
+  flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font-family: inherit; font-size: 13px; padding: 8px 10px;
+  resize: none; min-height: 60px; overflow: hidden;
+}
+.comment-form textarea:focus { outline: none; border-color: var(--blue); }
+.comment-form textarea::placeholder { color: var(--text-muted); }
+.comment-form button {
+  align-self: flex-end; background: var(--blue); color: #fff; border: none;
+  border-radius: var(--radius); padding: 6px 14px; font-size: 13px; font-weight: 500;
+  cursor: pointer; white-space: nowrap;
+}
+.comment-form button:hover { background: var(--blue-hover); }
+.comment-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.status-badge {
+  display: inline-block; font-size: 12px; padding: 2px 8px;
+  border-radius: 10px; font-weight: 500;
+}
+.status-badge.open { background: rgba(63,185,80,0.15); color: var(--accent-open); }
+.status-badge.in_progress { background: rgba(210,153,34,0.15); color: var(--accent-progress); }
+.status-badge.done { background: rgba(139,148,158,0.15); color: var(--accent-done); }
+.status-badge.archived { background: rgba(72,79,88,0.15); color: #484f58; }
+</style>
+</head>
+<body>
+<header>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <h1>Backlog</h1>
+    <select id="project-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;font-size:13px;font-family:inherit;cursor:pointer;">
+      <option value="">Select project...</option>
+    </select>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="refresh-info" id="connection-status">Connecting...</span>
+    <button class="btn btn-ghost btn-sm" id="logs-btn" style="font-size:12px;">Logs</button>
+  </div>
+</header>
+
+<div class="log-drawer" id="log-drawer">
+  <div class="log-drawer-header">
+    <h2>Application Logs</h2>
+    <button class="btn btn-ghost btn-sm" id="logs-refresh-btn">Refresh</button>
+    <button class="modal-close" id="logs-close-btn">&times;</button>
+  </div>
+  <div class="log-entries" id="log-entries"></div>
+</div>
+
+<div class="board" id="board"></div>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-title"></h2>
+      <button class="modal-close" id="modal-close-btn">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer">
+      <button class="btn btn-sm" id="modal-delete-btn" style="background:var(--red);color:#fff;">Delete Item</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const COLUMNS = [
+  { status: 'open', label: 'Open' },
+  { status: 'in_progress', label: 'In Progress' },
+  { status: 'done', label: 'Done' },
+  { status: 'archived', label: 'Archived' },
+];
+
+let allItems = [];
+let draggedId = null;
+let openModalItemId = null;
+let depDropdown = null;
+let currentProject = null;
+let evtSource = null;
+
+function apiBase() {
+  return currentProject ? '/api/projects/' + encodeURIComponent(currentProject) : '';
+}
+
+function autoGrow(textarea) {
+  const resize = () => { textarea.style.height = 'auto'; textarea.style.height = textarea.scrollHeight + 'px'; };
+  textarea.addEventListener('input', resize);
+  // Initial sizing after it's in the DOM
+  requestAnimationFrame(resize);
+  return textarea;
+}
+
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'className') e.className = v;
+      else if (k === 'textContent') e.textContent = v;
+      else if (k === 'draggable') e.draggable = v;
+      else if (k.startsWith('on')) e.addEventListener(k.slice(2).toLowerCase(), v);
+      else if (k.startsWith('data-')) e.setAttribute(k, v);
+      else if (k === 'style') Object.assign(e.style, v);
+      else e.setAttribute(k, v);
+    }
+  }
+  for (const child of children) {
+    if (typeof child === 'string') e.appendChild(document.createTextNode(child));
+    else if (child) e.appendChild(child);
+  }
+  return e;
+}
+
+// ── API helpers ───────────────────────────────────────────────────────────
+
+async function apiFetch(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.json();
+}
+
+function apiPatch(path, body) {
+  return apiFetch(path, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+function apiPost(path, body) {
+  return apiFetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+function apiDelete(path) {
+  return apiFetch(path, { method: 'DELETE' });
+}
+
+async function fetchItems() {
+  if (!currentProject) return;
+  try {
+    const res = await fetch(apiBase() + '/items');
+    allItems = await res.json();
+    render();
+  } catch (e) { console.error('Failed to fetch items:', e); }
+}
+
+async function fetchItem(id) {
+  return apiFetch(apiBase() + '/items/' + id);
+}
+
+async function updateStatus(id, status) {
+  if (!currentProject) return;
+  try { await apiPatch(apiBase() + '/items/' + id, { status }); }
+  catch (e) { console.error('Failed to update item:', e); }
+}
+
+async function loadProjects() {
+  try {
+    const res = await fetch('/api/projects');
+    const projects = await res.json();
+    const select = document.getElementById('project-select');
+    select.replaceChildren(el('option', { value: '', textContent: 'Select project...' }));
+    for (const p of projects) {
+      const label = p.slug + ' (' + p.open + '/' + p.in_progress + '/' + p.done + ')';
+      const opt = el('option', { value: p.slug, textContent: label });
+      if (p.slug === currentProject) opt.selected = true;
+      select.appendChild(opt);
+    }
+  } catch (e) { console.error('Failed to load projects:', e); }
+}
+
+function selectProject(slug) {
+  if (slug === currentProject) return;
+  currentProject = slug;
+  allItems = [];
+  render();
+  if (evtSource) { evtSource.close(); evtSource = null; }
+  if (slug) {
+    history.replaceState(null, '', '/project/' + encodeURIComponent(slug));
+    connectSSE();
+  } else {
+    history.replaceState(null, '', '/');
+    document.getElementById('connection-status').textContent = 'No project selected';
+    document.getElementById('connection-status').style.color = 'var(--text-muted)';
+  }
+}
+
+// Refresh modal in place
+async function refreshModal() {
+  if (!openModalItemId) return;
+  const item = await fetchItem(openModalItemId);
+
+  // Update title
+  document.getElementById('modal-title').replaceChildren(
+    el('span', { className: 'card-id', textContent: '#' + item.id }),
+    ' ' + item.title
+  );
+
+  const body = document.getElementById('modal-body');
+
+  // Replace each named section in-place by data-section attribute
+  function replaceSection(name, node) {
+    node.dataset.section = name;
+    const existing = body.querySelector(`[data-section="${name}"]`);
+    if (existing) existing.replaceWith(node);
+    else body.appendChild(node);
+  }
+
+  replaceSection('checklist', buildChecklistSection(item));
+  replaceSection('deps', buildDepsSection(item));
+  replaceSection('comments', buildCommentsSection(item));
+}
+
+// ── Markdown-to-DOM renderer ──────────────────────────────────────────────
+
+function md(text) {
+  const container = el('div', { className: 'md' });
+  const lines = text.split('\n');
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim() === '') { i++; continue; }
+
+    if (line.trimStart().startsWith('```')) {
+      const codeLines = [];
+      i++;
+      while (i < lines.length && !lines[i].trimStart().startsWith('```')) { codeLines.push(lines[i]); i++; }
+      i++;
+      container.appendChild(el('pre', null, el('code', { textContent: codeLines.join('\n') })));
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,4})\s+(.+)$/);
+    if (headingMatch) {
+      container.appendChild(el('h' + headingMatch[1].length, null, ...mdInline(headingMatch[2])));
+      i++; continue;
+    }
+
+    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line.trim())) { container.appendChild(el('hr')); i++; continue; }
+
+    if (line.trimStart().startsWith('> ')) {
+      const qLines = [];
+      while (i < lines.length && lines[i].trimStart().startsWith('> ')) { qLines.push(lines[i].trimStart().slice(2)); i++; }
+      container.appendChild(el('blockquote', null, ...mdInline(qLines.join(' '))));
+      continue;
+    }
+
+    if (/^\s*[-*]\s+/.test(line)) {
+      const ul = el('ul');
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        ul.appendChild(el('li', null, ...mdInline(lines[i].replace(/^\s*[-*]\s+/, '')))); i++;
+      }
+      container.appendChild(ul); continue;
+    }
+
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const ol = el('ol');
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
+        ol.appendChild(el('li', null, ...mdInline(lines[i].replace(/^\s*\d+[.)]\s+/, '')))); i++;
+      }
+      container.appendChild(ol); continue;
+    }
+
+    const pLines = [];
+    while (i < lines.length && lines[i].trim() !== ''
+      && !lines[i].trimStart().startsWith('```') && !lines[i].match(/^#{1,4}\s/)
+      && !lines[i].trimStart().startsWith('> ') && !/^\s*[-*]\s+/.test(lines[i])
+      && !/^\s*\d+[.)]\s+/.test(lines[i]) && !/^(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i].trim())
+    ) { pLines.push(lines[i]); i++; }
+    if (pLines.length) container.appendChild(el('p', null, ...mdInline(pLines.join(' '))));
+  }
+  return container;
+}
+
+function mdInline(text) {
+  const nodes = [];
+  const re = /`([^`]+)`|\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|\[([^\]]+)\]\(([^)]+)\)|#(\d+)/g;
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    if (m[1] !== undefined)      nodes.push(el('code', { textContent: m[1] }));
+    else if (m[2] !== undefined || m[3] !== undefined)
+      nodes.push(el('strong', { textContent: m[2] || m[3] }));
+    else if (m[4] !== undefined || m[5] !== undefined)
+      nodes.push(el('em', { textContent: m[4] || m[5] }));
+    else if (m[6] !== undefined) {
+      const a = el('a', { textContent: m[6] });
+      const href = m[7];
+      if (/^https?:\/\/|^#|^\//.test(href)) {
+        a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      }
+      nodes.push(a);
+    } else if (m[8] !== undefined) {
+      const refId = parseInt(m[8], 10);
+      const a = el('a', { className: 'item-ref', textContent: '#' + m[8] });
+      a.href = '#'; a.addEventListener('click', (e) => { e.preventDefault(); openModal(refId); });
+      nodes.push(a);
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+// ── Board rendering ───────────────────────────────────────────────────────
+
+function render() {
+  const board = document.getElementById('board');
+  board.replaceChildren();
+
+  for (const col of COLUMNS) {
+    const items = allItems.filter(i => i.status === col.status);
+    const headerEl = el('div', { className: 'column-header' },
+      el('span', { className: 'dot' }), col.label,
+      el('span', { className: 'count', textContent: String(items.length) })
+    );
+
+    const bodyEl = el('div', { className: 'column-body' });
+    bodyEl.dataset.status = col.status;
+    bodyEl.addEventListener('dragover', e => { e.preventDefault(); bodyEl.classList.add('drag-over'); });
+    bodyEl.addEventListener('dragleave', () => { bodyEl.classList.remove('drag-over'); });
+    bodyEl.addEventListener('drop', e => {
+      e.preventDefault(); bodyEl.classList.remove('drag-over');
+      if (draggedId !== null) { updateStatus(draggedId, col.status); draggedId = null; }
+    });
+
+    if (items.length === 0) {
+      bodyEl.appendChild(el('div', { className: 'empty-col', textContent: 'No items' }));
+    } else {
+      for (const item of items) bodyEl.appendChild(buildCard(item));
+    }
+    board.appendChild(el('div', { className: 'column col-' + col.status }, headerEl, bodyEl));
+  }
+}
+
+function buildCard(item) {
+  const titleEl = el('div', { className: 'card-title' },
+    el('span', { className: 'card-id', textContent: '#' + item.id }), item.title
+  );
+  const card = el('div', { className: 'card', draggable: true }, titleEl);
+  const metaChildren = [];
+
+  if (item.checklist) {
+    const pct = item.checklist.total > 0 ? Math.round((item.checklist.done / item.checklist.total) * 100) : 0;
+    const pctClass = pct === 0 ? 'pct-0' : pct === 100 ? 'pct-full' : pct >= 60 ? 'pct-high' : pct >= 30 ? 'pct-mid' : 'pct-low';
+    const fill = el('span', { className: 'progress-bar-fill ' + pctClass });
+    fill.style.width = Math.max(pct, 2) + '%';
+    const textClass = pct === 100 ? 'progress-text pct-full' : 'progress-text';
+    metaChildren.push(el('span', { className: 'checklist-progress' },
+      el('span', { className: 'progress-bar' }, fill),
+      el('span', { className: textClass, textContent: item.checklist.done + '/' + item.checklist.total })
+    ));
+  }
+  if (item.dependencies && item.dependencies.length > 0) {
+    const total = item.dependencies.length;
+    const done = item.dependencies.filter(id => {
+      const dep = allItems.find(i => i.id === id);
+      return dep && dep.status === 'done';
+    }).length;
+    const pct = Math.round((done / total) * 100);
+    const pctClass = pct === 0 ? 'pct-0' : pct === 100 ? 'pct-full' : pct >= 60 ? 'pct-high' : pct >= 30 ? 'pct-mid' : 'pct-low';
+    const fill = el('span', { className: 'progress-bar-fill ' + pctClass });
+    fill.style.width = Math.max(pct, 2) + '%';
+    const textClass = pct === 100 ? 'progress-text pct-full' : 'progress-text';
+    metaChildren.push(el('span', { className: 'checklist-progress', title: 'Dependencies: ' + done + '/' + total + ' done' },
+      el('span', { className: 'deps', textContent: 'deps' }),
+      el('span', { className: 'progress-bar', style: { width: '50px' } }, fill),
+      el('span', { className: textClass, textContent: done + '/' + total })
+    ));
+  }
+  if (item.comments) {
+    metaChildren.push(el('span', { className: 'deps', title: item.comments + ' comment' + (item.comments !== 1 ? 's' : ''), textContent: '💬 ' + item.comments }));
+  }
+  if (metaChildren.length) card.appendChild(el('div', { className: 'card-meta' }, ...metaChildren));
+
+  card.addEventListener('dragstart', () => { draggedId = item.id; card.classList.add('dragging'); });
+  card.addEventListener('dragend', () => { card.classList.remove('dragging'); });
+  card.addEventListener('click', () => openModal(item.id));
+  return card;
+}
+
+// ── Modal ─────────────────────────────────────────────────────────────────
+
+async function openModal(id, pushHistory = true) {
+  openModalItemId = id;
+  if (pushHistory) history.pushState(null, '', '#item-' + id);
+  const item = await fetchItem(id);
+
+  document.getElementById('modal-title').replaceChildren(
+    el('span', { className: 'card-id', textContent: '#' + item.id }),
+    ' ' + item.title
+  );
+
+  const body = document.getElementById('modal-body');
+  body.replaceChildren();
+
+  // Metadata
+  const metaBar = el('div', { className: 'meta-bar' },
+    el('div', { className: 'meta-item' }, el('span', { className: 'meta-label', textContent: 'ID' }), el('span', { className: 'meta-value', textContent: '#' + item.id })),
+    el('div', { className: 'meta-item' }, el('span', { className: 'meta-label', textContent: 'Status' }), el('span', { className: 'meta-value status-badge ' + item.status, textContent: item.status.replace('_', ' ') })),
+    el('div', { className: 'meta-item' }, el('span', { className: 'meta-label', textContent: 'Created' }), el('span', { className: 'meta-value', textContent: new Date(item.created_at).toLocaleString() })),
+    el('div', { className: 'meta-item' }, el('span', { className: 'meta-label', textContent: 'Updated' }), el('span', { className: 'meta-value', textContent: new Date(item.updated_at).toLocaleString() }))
+  );
+  body.appendChild(metaBar);
+
+  // Description (editable)
+  body.appendChild(buildDescriptionSection(item));
+
+  // Checklist (interactive)
+  const clSection = buildChecklistSection(item);
+  clSection.dataset.section = 'checklist';
+  body.appendChild(clSection);
+
+  // Dependencies
+  const depsSection = buildDepsSection(item);
+  depsSection.dataset.section = 'deps';
+  body.appendChild(depsSection);
+
+  // Comments
+  const commentsSection = buildCommentsSection(item);
+  commentsSection.dataset.section = 'comments';
+  body.appendChild(commentsSection);
+
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+// ── Description section ───────────────────────────────────────────────────
+
+function buildDescriptionSection(item) {
+  const section = el('section');
+  const header = el('div', { className: 'section-header' },
+    el('h3', { textContent: 'Description' }),
+    el('button', { className: 'btn btn-sm btn-ghost', textContent: 'Edit',
+      onClick: () => showDescriptionEditor(section, item) })
+  );
+  section.appendChild(header);
+  const content = el('div', { className: 'section-content' });
+  if (item.description) {
+    content.appendChild(md(item.description));
+  } else {
+    content.appendChild(el('p', { style: { color: 'var(--text-muted)', fontSize: '13px' } }, 'No description.'));
+  }
+  section.appendChild(content);
+  return section;
+}
+
+function showDescriptionEditor(section, item) {
+  // Measure rendered description height before replacing content
+  const renderedEl = section.querySelector('.md-block');
+  const renderedHeight = renderedEl ? renderedEl.scrollHeight : 0;
+
+  section.replaceChildren();
+  const header = el('div', { className: 'section-header' }, el('h3', { textContent: 'Description' }));
+  section.appendChild(header);
+
+  const content = el('div', { className: 'section-content' });
+  const textarea = el('textarea', { className: 'edit-textarea', 'placeholder': 'Description (supports markdown)' });
+  textarea.value = item.description || '';
+  textarea.dataset.original = item.description || '';
+  content.appendChild(textarea);
+  autoGrow(textarea);
+
+  // Also respect rendered description height as minimum
+  if (renderedHeight > 100) textarea.style.minHeight = renderedHeight + 'px';
+
+  const actions = el('div', { className: 'edit-actions' });
+  const saveBtn = el('button', { className: 'btn', textContent: 'Save' });
+  const cancelBtn = el('button', { className: 'btn btn-ghost', textContent: 'Cancel' });
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    await apiPatch(apiBase() + '/items/' + item.id, { description: textarea.value });
+    await refreshModal();
+  });
+  cancelBtn.addEventListener('click', () => refreshModal());
+
+  actions.appendChild(saveBtn);
+  actions.appendChild(cancelBtn);
+  content.appendChild(actions);
+  section.appendChild(content);
+  textarea.focus();
+}
+
+// ── Checklist section ─────────────────────────────────────────────────────
+
+function buildChecklistSection(item) {
+  const section = el('section');
+  const header = el('div', { className: 'section-header' }, el('h3', { textContent: 'Checklist' }));
+  section.appendChild(header);
+
+  const content = el('div', { className: 'section-content' });
+  content.appendChild(buildChecklistDom(item.checklist, item.id, null));
+
+  // Add item form
+  const addForm = el('div', { className: 'cl-add-form' });
+  const addInput = el('input', { 'placeholder': 'Add checklist item...' });
+  const addBtn = el('button', { className: 'btn btn-sm', textContent: 'Add' });
+
+  addBtn.addEventListener('click', async () => {
+    const label = addInput.value.trim();
+    if (!label) return;
+    addBtn.disabled = true;
+    await apiPost(apiBase() + '/items/' + item.id + '/checklist', { label });
+    await refreshModal();
+  });
+  addInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); addBtn.click(); }
+  });
+
+  addForm.appendChild(addInput);
+  addForm.appendChild(addBtn);
+  content.appendChild(addForm);
+  section.appendChild(content);
+  return section;
+}
+
+function buildChecklistDom(items, itemId, parentId) {
+  const container = el('div');
+  for (const c of items) {
+    const row = el('div', { className: 'cl-item' });
+
+    // Checkbox
+    const check = el('button', { className: 'cl-check' + (c.checked ? ' checked' : ''), textContent: c.checked ? '\u2713' : '' });
+    check.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await apiPatch(apiBase() + '/items/' + itemId + '/checklist/' + c.id, { checked: !c.checked });
+      await refreshModal();
+    });
+    row.appendChild(check);
+
+    // Label
+    const labelSpan = el('span', { className: 'cl-label' }, ...mdInline(c.label));
+    row.appendChild(labelSpan);
+
+    // Actions
+    const actions = el('span', { className: 'cl-actions' });
+
+    // Add child button
+    const addChildBtn = el('button', { className: 'btn-icon', textContent: '+', 'title': 'Add sub-item' });
+    addChildBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showAddChildForm(row, itemId, c.id);
+    });
+    actions.appendChild(addChildBtn);
+
+    // Edit button
+    const editBtn = el('button', { className: 'btn-icon', textContent: '\u270E', 'title': 'Edit' });
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showEditChecklistItem(row, itemId, c);
+    });
+    actions.appendChild(editBtn);
+
+    // Delete button
+    const delBtn = el('button', { className: 'btn-icon danger', textContent: '\u2715', 'title': 'Delete' });
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await apiDelete(apiBase() + '/items/' + itemId + '/checklist/' + c.id);
+      await refreshModal();
+    });
+    actions.appendChild(delBtn);
+
+    row.appendChild(actions);
+    container.appendChild(row);
+
+    // Children
+    if (c.children && c.children.length) {
+      const nested = el('div', { className: 'cl-nested' }, buildChecklistDom(c.children, itemId, c.id));
+      container.appendChild(nested);
+    }
+  }
+  return container;
+}
+
+function showEditChecklistItem(row, itemId, c) {
+  const form = el('div', { className: 'cl-item' });
+  const editWrap = el('div', { className: 'inline-edit' });
+  const input = el('input');
+  input.value = c.label;
+
+  const saveBtn = el('button', { className: 'btn btn-sm', textContent: 'Save' });
+  const cancelBtn = el('button', { className: 'btn btn-sm btn-ghost', textContent: 'Cancel' });
+
+  saveBtn.addEventListener('click', async () => {
+    const label = input.value.trim();
+    if (!label) return;
+    saveBtn.disabled = true;
+    await apiPatch(apiBase() + '/items/' + itemId + '/checklist/' + c.id, { label });
+    await refreshModal();
+  });
+  cancelBtn.addEventListener('click', () => refreshModal());
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); saveBtn.click(); }
+    if (e.key === 'Escape') cancelBtn.click();
+  });
+
+  editWrap.appendChild(input);
+  editWrap.appendChild(saveBtn);
+  editWrap.appendChild(cancelBtn);
+  form.appendChild(editWrap);
+  row.replaceWith(form);
+  input.focus();
+  input.select();
+}
+
+function showAddChildForm(row, itemId, parentId) {
+  // Insert form after the row
+  const form = el('div', { className: 'cl-add-form', style: { marginLeft: '22px', marginTop: '4px', marginBottom: '4px' } });
+  const input = el('input', { 'placeholder': 'Add sub-item...' });
+  const addBtn = el('button', { className: 'btn btn-sm', textContent: 'Add' });
+  const cancelBtn = el('button', { className: 'btn btn-sm btn-ghost', textContent: 'Cancel' });
+
+  addBtn.addEventListener('click', async () => {
+    const label = input.value.trim();
+    if (!label) return;
+    addBtn.disabled = true;
+    await apiPost(apiBase() + '/items/' + itemId + '/checklist', { label, parent_id: parentId });
+    await refreshModal();
+  });
+  cancelBtn.addEventListener('click', () => form.remove());
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); addBtn.click(); }
+    if (e.key === 'Escape') form.remove();
+  });
+
+  form.appendChild(input);
+  form.appendChild(addBtn);
+  form.appendChild(cancelBtn);
+  row.after(form);
+  input.focus();
+}
+
+// ── Comments section ──────────────────────────────────────────────────────
+
+function buildDepsSection(item) {
+  const section = el('section');
+  const header = el('div', { className: 'section-header' }, el('h3', { textContent: 'Dependencies' }));
+  section.appendChild(header);
+
+  const content = el('div', { className: 'section-content' });
+
+  let highlightedDepIdx = -1;
+  const depRows = [];
+
+  function setDepHighlight(idx) {
+    depRows.forEach((r, i) => r.style.background = i === idx ? '#1c2129' : '');
+    highlightedDepIdx = idx;
+    if (idx >= 0) depRows[idx].scrollIntoView({ block: 'nearest' });
+  }
+
+  async function removeDep(depId, currentVersion) {
+    await apiFetch(apiBase() + '/items/' + item.id + '/dependencies/' + depId, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: currentVersion }) });
+    await refreshModal();
+  }
+
+  if (item.dependencies.length > 0) {
+    const depList = el('ul', { style: { listStyle: 'none', fontSize: '13px', margin: '0 0 8px 0', padding: '0' } });
+    for (const d of item.dependencies) {
+      const dep = allItems.find(i => i.id === d.depends_on_id);
+      const link = el('a', { className: 'item-ref', textContent: '#' + d.depends_on_id });
+      link.href = '#';
+      link.addEventListener('click', e => { e.preventDefault(); openModal(d.depends_on_id); });
+
+      const delBtn = el('button', { className: 'btn-icon danger', textContent: '\u2715', title: 'Remove dependency' });
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        delBtn.disabled = true;
+        await removeDep(d.depends_on_id, item.version);
+      });
+
+      const row = el('li', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 4px', borderRadius: '4px', transition: 'background .1s' } },
+        link, dep ? ' ' + dep.title : '', delBtn);
+      depRows.push(row);
+      depList.appendChild(row);
+    }
+    content.appendChild(depList);
+  }
+
+  // Add dependency form with search
+  const addForm = el('div', { className: 'cl-add-form' });
+  const existingDepIds = new Set(item.dependencies.map(d => d.depends_on_id));
+  let selectedDepId = null;
+
+  const addInput = el('input', { placeholder: 'Search by title or #id...', style: { flex: '1', minWidth: '0' } });
+  const addBtn = el('button', { className: 'btn btn-sm', textContent: 'Add' });
+
+  // Dropdown is appended to body to escape overflow:hidden on section
+  if (depDropdown) { depDropdown.remove(); depDropdown = null; }
+  const dropdown = el('ul', { style: { display: 'none', position: 'fixed', zIndex: '1000', listStyle: 'none', margin: '0', padding: '4px 0', background: '#161b22', border: '1px solid #30363d', borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', maxHeight: '160px', overflowY: 'auto', fontSize: '13px' } });
+  depDropdown = dropdown;
+  document.body.appendChild(dropdown);
+
+  function positionDropdown() {
+    const r = addInput.getBoundingClientRect();
+    dropdown.style.top = (r.bottom + 2) + 'px';
+    dropdown.style.left = r.left + 'px';
+    dropdown.style.width = r.width + 'px';
+  }
+
+  let highlightedIndex = -1;
+
+  function showDropdown(q) {
+    const query = q.trim().toLowerCase();
+    dropdown.innerHTML = '';
+    selectedDepId = null;
+    highlightedIndex = -1;
+    const idOnly = query.startsWith('#') ? parseInt(query.slice(1), 10) : null;
+    const matches = allItems.filter(i => {
+      if (i.id === item.id) return false;
+      if (existingDepIds.has(i.id)) return false;
+      if (idOnly) return i.id === idOnly;
+      return !query || String(i.id).includes(query) || i.title.toLowerCase().includes(query);
+    }).slice(0, 8);
+    if (!matches.length) { dropdown.style.display = 'none'; return; }
+    for (const m of matches) {
+      const opt = el('li', { style: { padding: '5px 10px', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } });
+      opt.innerHTML = `<span style="opacity:.5;margin-right:6px">#${m.id}</span>${m.title}`;
+      opt.addEventListener('mousedown', e => { e.preventDefault(); selectItem(m); });
+      dropdown.appendChild(opt);
+    }
+    positionDropdown();
+    dropdown.style.display = 'block';
+  }
+
+  function setHighlight(idx) {
+    const opts = dropdown.querySelectorAll('li');
+    if (!opts.length) return;
+    highlightedIndex = Math.max(0, Math.min(idx, opts.length - 1));
+    opts.forEach((o, i) => o.style.background = i === highlightedIndex ? '#1c2129' : '');
+    opts[highlightedIndex].scrollIntoView({ block: 'nearest' });
+  }
+
+  function selectItem(m) {
+    selectedDepId = m.id;
+    addInput.value = `#${m.id} ${m.title}`;
+    dropdown.style.display = 'none';
+  }
+
+  function hideDropdown() { dropdown.style.display = 'none'; }
+
+  addInput.addEventListener('input', () => showDropdown(addInput.value));
+  addInput.addEventListener('focus', () => showDropdown(addInput.value));
+  addInput.addEventListener('blur', () => setTimeout(hideDropdown, 150));
+  addInput.addEventListener('keydown', e => {
+    const opts = dropdown.style.display !== 'none' ? dropdown.querySelectorAll('li') : [];
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (highlightedDepIdx >= 0) { setDepHighlight(-1); if (opts.length) setHighlight(0); }
+      else if (opts.length) setHighlight(highlightedIndex + 1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (highlightedIndex > 0) { setHighlight(highlightedIndex - 1); }
+      else if (depRows.length) { setHighlight(-1); setDepHighlight(depRows.length - 1); }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (highlightedIndex >= 0) opts[highlightedIndex].dispatchEvent(new MouseEvent('mousedown'));
+      else addBtn.click();
+    } else if ((e.key === 'Delete' || e.key === 'Backspace') && highlightedDepIdx >= 0) {
+      e.preventDefault();
+      const d = item.dependencies[highlightedDepIdx];
+      removeDep(d.depends_on_id, item.version);
+    }
+  });
+
+  addBtn.addEventListener('click', async () => {
+    const val = selectedDepId ?? parseInt(addInput.value.trim(), 10);
+    if (!val) return;
+    addBtn.disabled = true;
+    hideDropdown();
+    try {
+      await apiPost(apiBase() + '/items/' + item.id + '/dependencies', { version: item.version, depends_on_id: val });
+      await refreshModal();
+    } catch (e) {
+      alert(e.message);
+      addBtn.disabled = false;
+    }
+  });
+  addForm.appendChild(addInput);
+  addForm.appendChild(addBtn);
+  content.appendChild(addForm);
+  section.appendChild(content);
+  return section;
+}
+
+function buildCommentsSection(item) {
+  const section = el('section');
+  const header = el('div', { className: 'section-header' }, el('h3', { textContent: 'Comments' }));
+  section.appendChild(header);
+
+  const content = el('div', { className: 'section-content' });
+  for (const c of item.comments) {
+    const author = c.author || 'agent';
+    content.appendChild(el('div', { className: 'comment comment-' + author },
+      el('div', { className: 'comment-header' },
+        el('span', { className: 'comment-author ' + author, textContent: author }),
+        el('span', { className: 'comment-date', textContent: new Date(c.created_at).toLocaleString() })
+      ),
+      md(c.body)
+    ));
+  }
+
+  // Comment form
+  const textarea = autoGrow(el('textarea', { 'placeholder': 'Add a comment... (supports markdown)', 'data-original': '' }));
+  const submitBtn = el('button', { textContent: 'Comment' });
+
+  submitBtn.addEventListener('click', async () => {
+    const text = textarea.value.trim();
+    if (!text) return;
+    submitBtn.disabled = true;
+    await apiPost(apiBase() + '/items/' + item.id + '/comments', { body: text });
+    await refreshModal();
+  });
+  textarea.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitBtn.click(); }
+  });
+
+  content.appendChild(el('div', { className: 'comment-form' }, textarea, submitBtn));
+  section.appendChild(content);
+  return section;
+}
+
+// ── Modal controls ────────────────────────────────────────────────────────
+
+function closeModal(pushHistory = true) {
+  openModalItemId = null;
+  if (depDropdown) { depDropdown.remove(); depDropdown = null; }
+  if (pushHistory) history.pushState(null, '', location.pathname);
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+document.getElementById('modal-delete-btn').addEventListener('click', async () => {
+  if (!openModalItemId) return;
+  if (!confirm('Permanently delete this item? This cannot be undone.')) return;
+  await apiDelete(apiBase() + '/items/' + openModalItemId);
+  closeModal();
+});
+document.getElementById('modal-overlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
+});
+
+// ── Live updates via SSE ──────────────────────────────────────────────────
+
+function connectSSE() {
+  if (!currentProject) return;
+  const statusEl = document.getElementById('connection-status');
+  if (evtSource) evtSource.close();
+  evtSource = new EventSource(apiBase() + '/events');
+
+  evtSource.addEventListener('update', e => {
+    try {
+      allItems = JSON.parse(e.data);
+      render();
+      loadProjects();
+      if (openModalItemId != null) {
+        // If the open item was deleted, close the modal
+        if (!allItems.find(i => i.id === openModalItemId)) {
+          closeModal();
+        } else {
+          // Guard: skip auto-refresh if the user has an unsaved edit in progress
+          const modalBody = document.getElementById('modal-body');
+          const textareas = modalBody ? modalBody.querySelectorAll('textarea') : [];
+          let isDirty = false;
+          for (const ta of textareas) {
+            if (document.activeElement === ta) { isDirty = true; break; }
+            if (ta.dataset.original !== undefined && ta.value !== ta.dataset.original) { isDirty = true; break; }
+          }
+          if (!isDirty) refreshModal();
+        }
+      }
+    }
+    catch (err) { console.error('SSE parse error:', err); }
+  });
+
+  evtSource.onopen = () => { statusEl.textContent = 'Live'; statusEl.style.color = '#3fb950'; };
+  evtSource.onerror = () => { statusEl.textContent = 'Reconnecting...'; statusEl.style.color = '#d29922'; };
+}
+
+// Project selector
+document.getElementById('project-select').addEventListener('change', (e) => {
+  selectProject(e.target.value);
+});
+
+// Detect project from URL path
+function initFromUrl() {
+  const m = location.pathname.match(/^\/project\/(.+?)(?:#|$)/);
+  if (m) currentProject = decodeURIComponent(m[1]);
+}
+
+// Open/close modal from URL hash (back/forward navigation)
+function syncFromHash(pushHistory = true) {
+  const m = location.hash.match(/^#item-(\d+)$/);
+  if (m) {
+    openModal(parseInt(m[1], 10), pushHistory);
+  } else if (openModalItemId) {
+    closeModal(false);
+  }
+}
+window.addEventListener('popstate', () => syncFromHash(false));
+
+// ── Log drawer ────────────────────────────────────────────────────────────
+
+let logEventSource = null;
+let logHistoryLoaded = 0;
+let logLoadingMore = false;
+const LOG_PAGE = 200;
+
+function buildLogRow(e) {
+  const { time, level, msg, ...extra } = e;
+  const timeStr = time ? new Date(time).toLocaleTimeString() : '';
+  const extraStr = Object.keys(extra).length ? JSON.stringify(extra) : '';
+  return el('div', { className: 'log-entry' },
+    el('span', { className: 'log-time', textContent: timeStr }),
+    el('span', { className: 'log-level ' + (level || 'info'), textContent: level || '' }),
+    el('span', { className: 'log-msg', textContent: msg || '' }),
+    extraStr ? el('span', { className: 'log-extra', textContent: extraStr }) : null
+  );
+}
+
+async function loadMoreLogHistory() {
+  if (logLoadingMore) return;
+  const container = document.getElementById('log-entries');
+  logLoadingMore = true;
+  const sentinel = el('div', { style: { padding: '4px 16px', color: 'var(--text-muted)', fontSize: '11px' }, textContent: 'Loading older entries...' });
+  container.prepend(sentinel);
+  try {
+    const res = await fetch(`/api/logs?lines=${LOG_PAGE}&skip=${logHistoryLoaded}`);
+    const entries = await res.json();
+    sentinel.remove();
+    if (entries.length === 0) {
+      const marker = el('div', { style: { padding: '4px 16px', color: 'var(--text-muted)', fontSize: '11px', textAlign: 'center' }, textContent: '— beginning of log —' });
+      container.prepend(marker);
+      container.removeEventListener('scroll', onLogScroll);
+      return;
+    }
+    const prevHeight = container.scrollHeight;
+    for (let i = entries.length - 1; i >= 0; i--) container.prepend(buildLogRow(entries[i]));
+    logHistoryLoaded += entries.length;
+    // Keep scroll position stable after prepend
+    container.scrollTop += container.scrollHeight - prevHeight;
+  } catch { sentinel.remove(); }
+  finally { logLoadingMore = false; }
+}
+
+function onLogScroll() {
+  if (this.scrollTop < 80) loadMoreLogHistory();
+}
+
+async function startLogStream() {
+  if (logEventSource) { logEventSource.close(); logEventSource = null; }
+  const container = document.getElementById('log-entries');
+  container.removeEventListener('scroll', onLogScroll);
+  container.replaceChildren(el('div', { style: { padding: '8px 16px', color: 'var(--text-muted)', fontSize: '12px' }, textContent: 'Loading...' }));
+  logHistoryLoaded = 0;
+
+  // Fetch initial lines via plain HTTP
+  try {
+    const res = await fetch(`/api/logs?lines=${LOG_PAGE}`);
+    const entries = await res.json();
+    container.replaceChildren();
+    if (entries.length === 0) {
+      container.appendChild(el('div', { style: { padding: '8px 16px', color: 'var(--text-muted)', fontSize: '12px' }, textContent: 'No log entries found.' }));
+    } else {
+      for (const entry of entries) container.appendChild(buildLogRow(entry));
+      logHistoryLoaded = entries.length;
+      container.scrollTop = container.scrollHeight;
+    }
+  } catch (err) {
+    container.replaceChildren(el('div', { style: { padding: '8px 16px', color: 'var(--red)', fontSize: '12px' }, textContent: 'Failed to load logs: ' + err.message }));
+    return;
+  }
+
+  container.addEventListener('scroll', onLogScroll);
+
+  // SSE only for new entries
+  logEventSource = new EventSource('/api/logs/stream');
+  logEventSource.addEventListener('entry', e => {
+    const entry = JSON.parse(e.data);
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
+    container.appendChild(buildLogRow(entry));
+    if (atBottom) container.scrollTop = container.scrollHeight;
+  });
+  logEventSource.onerror = () => { /* SSE auto-reconnects */ };
+}
+
+function stopLogStream() {
+  if (logEventSource) { logEventSource.close(); logEventSource = null; }
+  document.getElementById('log-entries').removeEventListener('scroll', onLogScroll);
+}
+
+function toggleLogs() {
+  const drawer = document.getElementById('log-drawer');
+  const isOpen = drawer.classList.toggle('open');
+  document.body.classList.toggle('logs-open', isOpen);
+  if (isOpen) startLogStream();
+  else stopLogStream();
+}
+
+function closeLogs() {
+  document.getElementById('log-drawer').classList.remove('open');
+  document.body.classList.remove('logs-open');
+  stopLogStream();
+}
+
+document.getElementById('logs-btn').addEventListener('click', toggleLogs);
+document.getElementById('logs-close-btn').addEventListener('click', closeLogs);
+document.getElementById('logs-refresh-btn').addEventListener('click', startLogStream);
+
+// Init
+initFromUrl();
+loadProjects().then(() => {
+  if (currentProject) {
+    document.getElementById('project-select').value = currentProject;
+    connectSSE();
+  }
+  setTimeout(() => syncFromHash(false), 100);
+});
+</script>
+</body>
+</html>

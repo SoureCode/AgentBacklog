@@ -1,0 +1,5 @@
+{
+  "name": "agent-backlog-monorepo",
+  "private": true,
+  "workspaces": ["packages/core", "packages/ui", "packages/api", "packages/mcp"]
+}

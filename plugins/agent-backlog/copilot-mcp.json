@@ -1,0 +1,6 @@
+{
+  "agent-backlog": {
+    "command": "npx",
+    "args": ["--yes", "@sourecode/agent-backlog-mcp"]
+  }
+}
