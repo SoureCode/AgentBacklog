@@ -1,5 +1,5 @@
 import { request } from "http";
-import { UI_PORT } from "@sourecode/agent-backlog-core/config.js";
+import { UI_PORT, UI_HOST } from "@sourecode/agent-backlog-core/config.js";
 import { tryBecomeUILeader, releaseUILeadership, getUILeaderPort } from "@sourecode/agent-backlog-core/db/leader.js";
 import { startUI, stopUI } from "@sourecode/agent-backlog-ui";
 import { logger } from "@sourecode/agent-backlog-core/logger.js";
@@ -37,7 +37,8 @@ export function createUIManager() {
 
   function healthCheckUI(port) {
     return new Promise((resolve) => {
-      const req = request({ hostname: "127.0.0.1", port, path: "/api/projects", method: "GET", timeout: 2000 }, (res) => {
+      const hostname = (UI_HOST && UI_HOST !== "0.0.0.0") ? UI_HOST : "127.0.0.1";
+      const req = request({ hostname, port, path: "/api/projects", method: "GET", timeout: 2000 }, (res) => {
         res.resume();
         resolve(res.statusCode === 200);
       });
