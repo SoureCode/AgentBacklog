@@ -2,7 +2,7 @@ import { openDatabase, closeDatabase } from "../db/schema.js";
 import { prepareStatements } from "../db/statements.js";
 import {
   now, requireItem, fullItem, allSummaries, summarize, deleteChecklistRecursive, wouldCycle,
-  requireVersion, bumpVersion,
+  requireVersion, bumpVersion, CHECKLIST_MAX_DEPTH,
 } from "../db/queries.js";
 import { VersionConflictError } from "../db/errors.js";
 
@@ -94,6 +94,17 @@ export class LocalStore {
       if (parent_id !== undefined && parent_id !== null) {
         const parent = this.stmts.getChecklistItem.get(parent_id, item_id);
         if (!parent) throw new Error(`ChecklistItem ${parent_id} not found on BacklogItem ${item_id}`);
+
+        // Compute depth of parent by walking up the chain
+        let depth = 1;
+        let current = parent;
+        while (current.parent_id !== null) {
+          current = this.stmts.getChecklistItem.get(current.parent_id, item_id);
+          depth++;
+        }
+        if (depth >= CHECKLIST_MAX_DEPTH) {
+          throw new Error(`Checklist nesting exceeds maximum allowed depth of ${CHECKLIST_MAX_DEPTH}. Restructure the checklist to reduce nesting.`);
+        }
         position = this.stmts.countChecklistByParent.get(item_id, parent_id).cnt;
       } else {
         position = this.stmts.countTopChecklist.get(item_id).cnt;
