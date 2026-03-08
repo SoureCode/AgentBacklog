@@ -4,6 +4,7 @@ import { NotFoundError, VersionConflictError } from "@sourecode/agent-backlog-co
 import { logger } from "@sourecode/agent-backlog-core/logger.js";
 import { json } from "@sourecode/agent-backlog-core/http/helpers.js";
 import { authenticate } from "./auth/auth.js";
+import { checkRateLimit } from "./auth/rate-limit.js";
 import { getStoreForSlug } from "./store/store.js";
 import { sse } from "./sse/broadcaster.js";
 import { Router } from "./router.js";
@@ -64,6 +65,13 @@ async function handleRequest(req, res) {
     const projectSlug = authenticate(req);
     if (!projectSlug) {
       json(res, 401, { error: "Unauthorized — provide Authorization: Bearer <key>" });
+      return;
+    }
+
+    const limited = checkRateLimit(projectSlug);
+    if (limited) {
+      res.setHeader("Retry-After", String(limited.retryAfter));
+      json(res, 429, { error: "Too many requests. Try again later.", retryAfter: limited.retryAfter });
       return;
     }
 
