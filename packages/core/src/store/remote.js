@@ -31,7 +31,9 @@ export class RemoteStore {
       if (err.name === "AbortError") {
         const msg = `Request timed out after ${REQUEST_TIMEOUT_MS}ms: ${path}`;
         logger.error("remote:timeout", { path, timeoutMs: REQUEST_TIMEOUT_MS });
-        throw new Error(msg);
+        const timeoutErr = new Error(msg);
+        timeoutErr.status = 504;
+        throw timeoutErr;
       }
       throw err;
     } finally {
