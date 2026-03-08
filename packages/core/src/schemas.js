@@ -37,7 +37,9 @@ export const AddChecklistSchema = z.object({
   parent_id: z.number().int().positive().optional(),
 });
 
-// Version optional — ui.js direct-DB checklist endpoints don't require it
+// UI checklist-add intentionally omits version: the browser receives live SSE
+// updates so the human always sees current state, making conflicts unlikely.
+// Agents (MCP/API) use AddChecklistSchema which requires version for optimistic locking.
 export const AddChecklistBodySchema = z.object({
   label: z.string().min(1),
   parent_id: z.number().int().positive().optional(),
