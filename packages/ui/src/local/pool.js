@@ -49,8 +49,8 @@ export function listProjects() {
   return projects;
 }
 
-export function broadcastProject(slug, onlyIfChanged = false) {
+export function broadcastProject(slug) {
   const project = getProject(slug);
   if (!project) return;
-  sse.broadcast(slug, allSummaries(project.stmts), onlyIfChanged);
+  sse.broadcast(slug, allSummaries(project.stmts));
 }
