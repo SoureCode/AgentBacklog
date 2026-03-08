@@ -169,6 +169,50 @@ describe("LocalStore — comments", () => {
   });
 });
 
+describe("LocalStore — close()", () => {
+  it("closes the database without error", () => {
+    const store = makeStore();
+    expect(() => store.close()).not.toThrow();
+  });
+});
+
+describe("LocalStore — searchItems includeArchived", () => {
+  it("returns archived items when includeArchived=true (default)", () => {
+    const store = makeStore();
+    const item = store.createItem({ title: "Alpha thing" });
+    // Soft-archive by setting status to 'archived' (MCP soft-delete)
+    store.updateItem(item.id, { version: 1, status: "archived" });
+    const results = store.searchItems("thing", null, { includeArchived: true });
+    expect(results.length).toBe(1);
+  });
+
+  it("excludes archived items when includeArchived=false", () => {
+    const store = makeStore();
+    const item = store.createItem({ title: "Beta thing" });
+    store.updateItem(item.id, { version: 1, status: "archived" });
+    const results = store.searchItems("thing", null, { includeArchived: false });
+    expect(results.length).toBe(0);
+  });
+
+  it("filters by status when status is provided", () => {
+    const store = makeStore();
+    store.createItem({ title: "Gamma thing" });
+    const results = store.searchItems("thing", "open");
+    expect(results.length).toBe(1);
+    expect(results[0].status).toBe("open");
+  });
+});
+
+describe("LocalStore — removeDependency nonexistent", () => {
+  it("throws when dependency does not exist", () => {
+    const store = makeStore();
+    const a = store.createItem({ title: "A" });
+    const b = store.createItem({ title: "B" });
+    expect(() => store.removeDependency(b.id, { version: 1, depends_on_id: a.id }))
+      .toThrow(/does not exist/);
+  });
+});
+
 describe("LocalStore — E2E: create → checklist → dependency → conflict → retry", () => {
   it("full workflow", () => {
     const store = makeStore();

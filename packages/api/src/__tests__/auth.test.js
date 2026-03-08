@@ -79,6 +79,34 @@ describe("checkRateLimit()", () => {
   });
 });
 
+// ---- loadApiKeys ----
+describe("loadApiKeys()", () => {
+  beforeEach(() => { vi.resetModules(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("returns {} when keys file does not exist", async () => {
+    vi.doMock("fs", async (importOriginal) => {
+      const real = await importOriginal();
+      return { ...real, existsSync: () => false };
+    });
+    const { loadApiKeys } = await import("../auth/auth.js");
+    expect(loadApiKeys()).toEqual({});
+  });
+
+  it("returns {} when keys file has invalid JSON", async () => {
+    vi.doMock("fs", async (importOriginal) => {
+      const real = await importOriginal();
+      return {
+        ...real,
+        existsSync: () => true,
+        readFileSync: () => "not-json{{{",
+      };
+    });
+    const { loadApiKeys } = await import("../auth/auth.js");
+    expect(loadApiKeys()).toEqual({});
+  });
+});
+
 // ---- authenticate ----
 describe("authenticate()", () => {
   beforeEach(() => {
@@ -125,6 +153,34 @@ describe("authenticate()", () => {
     const { authenticate } = await import("../auth/auth.js");
     const slug = authenticate({ headers: { authorization: "Bearer sk-proj-testkey" } });
     expect(slug).toBe("my-project");
+  });
+
+  it("migrates a non-matching plaintext key and continues searching", async () => {
+    const writeMock = vi.fn();
+    vi.doMock("fs", async (importOriginal) => {
+      const real = await importOriginal();
+      const otherPlaintextKey = "sk-proj-otherkey";
+      const targetKey = "sk-proj-targetkey";
+      const { createHash } = await import("crypto");
+      const targetHash = createHash("sha256").update(targetKey).digest("hex");
+      // Two entries: one plaintext non-matching, one already-hashed matching
+      const keys = {
+        [otherPlaintextKey]: { slug: "other-project", created: "2024-01-01" },
+        [targetHash]: { slug: "target-project", created: "2024-01-01" },
+      };
+      return {
+        ...real,
+        existsSync: () => true,
+        readFileSync: () => JSON.stringify(keys),
+        mkdirSync: vi.fn(),
+        writeFileSync: writeMock,
+      };
+    });
+    const { authenticate } = await import("../auth/auth.js");
+    const slug = authenticate({ headers: { authorization: "Bearer sk-proj-targetkey" } });
+    expect(slug).toBe("target-project");
+    // writeFileSync should have been called due to migration of otherPlaintextKey
+    expect(writeMock).toHaveBeenCalled();
   });
 
   it("auto-migrates plaintext key and returns slug", async () => {

@@ -93,6 +93,16 @@ describe("SSEBroadcaster", () => {
     expect(sse.clientCount("b")).toBe(0);
   });
 
+  it("cleanup is a no-op when slug no longer exists in clients map", () => {
+    const sse = new SSEBroadcaster("test");
+    const res = mockRes();
+    const cleanup = sse.register("proj", res, []);
+    // Manually clear the clients map to simulate slug being removed
+    sse.clients.clear();
+    // Should not throw even with optional chaining path
+    expect(() => cleanup()).not.toThrow();
+  });
+
   it("activeSlugs returns slugs with clients", () => {
     const sse = new SSEBroadcaster("test");
     sse.register("x", mockRes(), []);

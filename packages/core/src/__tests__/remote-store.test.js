@@ -146,6 +146,56 @@ describe("RemoteStore — remaining store methods", () => {
   });
 });
 
+describe("RemoteStore — branch coverage", () => {
+  function makeTrackedStore(impl) {
+    const fetchFn = vi.fn(impl);
+    vi.stubGlobal("fetch", fetchFn);
+    return { store: new RemoteStore("http://localhost:3000", "test-key"), fetchFn };
+  }
+
+  it("409 with missing body fields falls back to 0/{} defaults", async () => {
+    const { store } = makeTrackedStore(() => mockResponse(409, {}));
+    const err = await store.updateItem(1, { version: 1 }).catch(e => e);
+    expect(err).toBeInstanceOf(VersionConflictError);
+    expect(err.id).toBe(0);
+    expect(err.expectedVersion).toBe(0);
+    expect(err.currentItem).toEqual({});
+  });
+
+  it("404 with no error field in body uses 'Not found' fallback", async () => {
+    const { store } = makeTrackedStore(() => mockResponse(404, {}));
+    const err = await store.getItem(1).catch(e => e);
+    expect(err).toBeInstanceOf(NotFoundError);
+    expect(err.message).toBe("Not found");
+  });
+
+  it("handles json() parse failure on non-ok response (catch branch)", async () => {
+    const { store } = makeTrackedStore(() => Promise.resolve({
+      status: 500,
+      ok: false,
+      headers: { get: () => "text/plain" },
+      json: () => Promise.reject(new Error("not json")),
+      text: () => Promise.resolve("Server Error"),
+    }));
+    await expect(store.listItems()).rejects.toThrow(/HTTP 500/);
+  });
+
+  it("searchItems with includeArchived=false appends exclude_archived", async () => {
+    const { store, fetchFn } = makeTrackedStore(() => mockResponse(200, []));
+    await store.searchItems("bug", null, { includeArchived: false });
+    const url = fetchFn.mock.calls[0][0];
+    expect(url).toContain("exclude_archived=1");
+  });
+
+  it("listItems with status and includeArchived=false sends both params", async () => {
+    const { store, fetchFn } = makeTrackedStore(() => mockResponse(200, []));
+    await store.listItems("open", { includeArchived: false });
+    const url = fetchFn.mock.calls[0][0];
+    expect(url).toContain("status=open");
+    expect(url).toContain("exclude_archived=1");
+  });
+});
+
 describe("RemoteStore — VersionConflictError fields", () => {
   it("populates id, expectedVersion, currentItem from 409 body", async () => {
     const current = { id: 5, version: 3, title: "Current" };
