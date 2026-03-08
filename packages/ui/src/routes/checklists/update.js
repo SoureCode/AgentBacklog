@@ -18,6 +18,6 @@ export function handleUpdateChecklist(stmts, slug, req, itemId, cid) {
     bumpVersion(stmts, itemId, item.version);
     const updated = stmts.getChecklistItem.get(cid, itemId);
     broadcastProject(slug);
-    return { status: 200, body: { ...updated, checked: !!updated.checked } };
+    return { status: 200, body: { id: updated.id, label: updated.label, checked: !!updated.checked, position: updated.position, children: [] } };
   };
 }
